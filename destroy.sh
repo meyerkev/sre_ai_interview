@@ -6,7 +6,7 @@ cd $(dirname $0)
 echo "🚀 Starting infrastructure destruction..."
 
 # Optional: choose interview/ECR repo name and bootstrap backend key
-INTERVIEW_NAME="interview-repo"
+INTERVIEW_NAME="sre-ai-interview"
 
 # Get the first argument after -- if it exists
 for ((i=1; i<=$#; i++)); do
