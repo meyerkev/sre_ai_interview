@@ -48,9 +48,18 @@ fi
 
 set -u
 
+# First, destroy the helm add-ons
+echo "🗑️ Destroying Helm add-ons..."
+cd terraform/aws-helm
+terraform init $TERRAFORM_INIT_ARGS
+terraform destroy -auto-approve
+
+echo "✨ Helm add-ons destroyed successfully!"
+
+
 # First, destroy the EKS cluster
 echo "🗑️ Destroying EKS cluster..."
-cd terraform/aws
+cd ../aws
 terraform init $TERRAFORM_INIT_ARGS
 terraform destroy -var "interviewee_name=${INTERVIEW_NAME}" -auto-approve
 

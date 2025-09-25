@@ -17,15 +17,22 @@ for ((i=1; i<=$#; i++)); do
 done
 
 BOOTSTRAP_STATE_KEY="${INTERVIEW_NAME}-bootstrap-ecr.tfstate"
+TERRAFORM_INIT_UPGRADE='-upgrade'
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bootstrap-state-key)
       BOOTSTRAP_STATE_KEY="$2"; shift 2 ;;
+    --upgrade)
+      TERRAFORM_INIT_UPGRADE='-upgrade' ;;
+    --no-upgrade)
+      TERRAFORM_INIT_UPGRADE='' ;;
     -h|--help)
-      echo "Usage: $0 [-- <interview-name>]";
+      echo "Usage: $0 [--upgrade] [-- <interview-name>]";
       echo "       [--bootstrap-state-key <s3/key/path.tfstate>]";
-      echo "Example: $0 -- acme-takehome --bootstrap-state-key interviews/acme/bootstrap-ecr.tfstate"; exit 0 ;;
+      echo "       --no-upgrade   Run terraform init without -upgrade";
+      echo "       --upgrade       Run terraform init with -upgrade (default)";
+      echo "Example: $0 --upgrade -- acme-takehome --bootstrap-state-key interviews/acme/bootstrap-ecr.tfstate"; exit 0 ;;
     --) shift; shift ;;  # Skip the -- and the interview name
     *) 
       if [[ "$1" != "--bootstrap-state-key" ]]; then
@@ -35,9 +42,9 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-TERRAFORM_INIT_ARGS=''
+TERRAFORM_INIT_ARGS="$TERRAFORM_INIT_UPGRADE"
 if [ ! -z "$TF_STATE_BUCKET" ]; then
-    TERRAFORM_INIT_ARGS="--backend-config=bucket=$TF_STATE_BUCKET"
+    TERRAFORM_INIT_ARGS="${TERRAFORM_INIT_ARGS} --backend-config=bucket=$TF_STATE_BUCKET"
 fi
 if [ ! -z "$TF_STATE_KEY" ]; then
     TERRAFORM_INIT_ARGS="$TERRAFORM_INIT_ARGS --backend-config=key=$TF_STATE_KEY"
@@ -83,6 +90,14 @@ terraform init $TERRAFORM_INIT_ARGS
 terraform apply -var "interviewee_name=${INTERVIEW_NAME}" -auto-approve
 
 echo "✨ EKS cluster initialized successfully!"
+
+# update kubeconfig
+$(terraform output -raw kubeconfig_command)
+
+# And install helm
+cd ../aws-helm
+terraform init $TERRAFORM_INIT_ARGS
+terraform apply -auto-approve
 
 # Build/push app image and deploy (only if ./app exists two levels up)
 if [ -d "../../app" ]; then

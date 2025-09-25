@@ -5,7 +5,7 @@ variable "region" {
 
 variable "cluster_name" {
   type    = string
-  default = "eks-cluster"
+  default = "sre-ai-interview-eks-cluster"
 }
 
 variable "vpc_name" {
@@ -35,7 +35,7 @@ variable "public_nodes" {
 
 variable "eks_node_instance_type" {
   type    = string
-  default = null  # "m6g.large"
+  default = null # "m6g.large"
 }
 
 variable "target_architecture" {
@@ -56,4 +56,16 @@ variable "max_nodes" {
 variable "desired_nodes" {
   type    = number
   default = 3
+}
+
+variable "node_disk_size" {
+  type        = number
+  default     = 200
+  description = "Size of the EKS node disk in GB"
+}
+
+variable "default_storage_class_type" {
+  type        = string
+  default     = "gp2"
+  description = "The EBS volume type to use for the default storage class (e.g. gp2, gp3)"
 }

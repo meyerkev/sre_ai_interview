@@ -2,7 +2,7 @@
 # Would I do this under any circumstances if I had more than 3 hours?  
 ## No
 terraform {
-  required_version = "1.12.0"
+  required_version = "~> 1.13.3"
   # Really you ought to clean this up and use a remote backend, but this is an interview and I spin this up A LOT, then run aws-nuke on the account
   backend "local" {
     path = "test-interview-helm.tfstate"
@@ -11,11 +11,11 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.34"
     }
     helm = {
-      source = "hashicorp/helm"
-      version = "~>2.13"
+      source  = "hashicorp/helm"
+      version = "~> 2.16"
     }
   }
 }
@@ -30,7 +30,7 @@ provider "aws" {
 }
 
 data "aws_eks_cluster" "cluster" {
-  name =  var.eks_cluster_name
+  name = var.eks_cluster_name
 }
 
 provider "kubernetes" {

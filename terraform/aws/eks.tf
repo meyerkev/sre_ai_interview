@@ -35,7 +35,7 @@ data "aws_caller_identity" "current" {}
 
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "~>5.1.2"
+  version = "~> 6.0"
 
   name = var.vpc_name == null ? "${var.cluster_name}-eks-vpc" : var.vpc_name
   cidr = var.vpc_cidr
@@ -80,16 +80,16 @@ module "eks-auth" {
       username = aws_iam_user.interviewee[0].name
       groups   = ["system:masters"]
     }
-  ] : [],
-  local.add_user ? [
-    {
-      userarn  = data.aws_caller_identity.current.arn
-      username = data.aws_caller_identity.current.user_id
-      groups   = ["system:masters"]
-    }
+    ] : [],
+    local.add_user ? [
+      {
+        userarn  = data.aws_caller_identity.current.arn
+        username = data.aws_caller_identity.current.user_id
+        groups   = ["system:masters"]
+      }
   ] : [])
-  
-  depends_on = [ null_resource.sleep ]
+
+  depends_on = [null_resource.sleep]
 }
 
 # Sleep 30 seconds to allow the EKS cluster to be created
@@ -97,20 +97,24 @@ resource "null_resource" "sleep" {
   provisioner "local-exec" {
     command = "sleep 30"
   }
-  depends_on = [ module.eks ]
+  depends_on = [module.eks]
 }
 
-//*
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~>20.10"
+  version = "~> 21.0"
 
-  cluster_name    = var.cluster_name
-  cluster_version = var.cluster_k8s_version
-  cluster_endpoint_public_access = true
+  # Module v21 renamed inputs to align with upstream JSON; use `name`
+  name               = var.cluster_name
+  kubernetes_version = var.cluster_k8s_version
+
+  endpoint_public_access                   = true
   enable_cluster_creator_admin_permissions = true
 
-  cluster_addons = {
+  create_auto_mode_iam_resources = false
+  compute_config                 = {}
+
+  addons = {
     coredns = {
       most_recent = true
     }
@@ -120,52 +124,15 @@ module "eks" {
     vpc-cni = {
       most_recent = true
     }
+    aws-ebs-csi-driver = {
+      most_recent = true
+    }
   }
 
-  vpc_id = module.vpc.vpc_id
-  # In production, it is strongly preferred to use private subnets, but this reduces friction in the interview
-  # No VPN required!
+  vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.public_subnets
 
-  eks_managed_node_group_defaults = {
-    # I make exactly zero promises that this is complete, but basically pick an instance type that matches your architecture
-    # I would love to have some weird locals thingy that figures out if you're ARM or x64 or whatever, but I'm not sure how to do that
-    # Known valid strings (I tested them on my laptop) are: arm64, x86_64
-    ami_type                   = contains(data.aws_ec2_instance_type.eks_node_instance_type.supported_architectures, "arm64") ? "AL2_ARM_64" : "AL2_x86_64"
-    instance_types             = [local.eks_node_instance_type]
-    iam_role_attach_cni_policy = true
-
-    tags = {
-      "k8s.io/cluster-autoscaler/enabled" = "true"
-      "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
-    }
-  }
-
-  eks_managed_node_groups = {
-    # Default node group - as provided by AWS EKS
-    default_node_group = {
-      min_size     = var.min_nodes
-      max_size     = var.max_nodes
-      desired_size = var.desired_nodes
-      # By default, the module creates a launch template to ensure tags are propagated to instances, etc.,
-      # so we need to disable it to use the default template provided by the AWS EKS managed node group service
-      use_custom_launch_template = false
-
-      disk_size = 50 # Large enough to work with by default when under time pressure
-
-      # Remote access cannot be specified with a launch template
-      remote_access = {
-        ec2_ssh_key               = module.key_pair.key_pair_name
-        source_security_group_ids = [aws_security_group.remote_access.id]
-      }
-
-      tags = {
-        "k8s.io/cluster-autoscaler/enabled" = "true"
-        "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
-      }
-    }
-  }
-  cluster_security_group_additional_rules = {
+  security_group_additional_rules = {
     eks_cluster = {
       type        = "ingress"
       description = "Never do this in production"
@@ -175,12 +142,39 @@ module "eks" {
       cidr_blocks = ["0.0.0.0/0"]
     }
   }
+
+  eks_managed_node_groups = {
+    default_node_group = {
+      ami_type                   = contains(data.aws_ec2_instance_type.eks_node_instance_type.supported_architectures, "arm64") ? "AL2_ARM_64" : "AL2_x86_64"
+      instance_types             = [local.eks_node_instance_type]
+      iam_role_attach_cni_policy = true
+
+      # v21 enables custom launch templates by default; disable to keep AWS defaults.
+      create_launch_template     = false
+      use_custom_launch_template = false
+
+      min_size     = var.min_nodes
+      max_size     = var.max_nodes
+      desired_size = var.desired_nodes
+
+      disk_size = var.node_disk_size
+
+      remote_access = {
+        ec2_ssh_key               = module.key_pair.key_pair_name
+        source_security_group_ids = [aws_security_group.remote_access.id]
+      }
+
+      tags = {
+        "k8s.io/cluster-autoscaler/enabled"             = "true"
+        "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
+      }
+    }
+  }
 }
-//*/
 
 module "key_pair" {
   source  = "terraform-aws-modules/key-pair/aws"
-  version = "~> 2.0"
+  version = "~> 2.1"
 
   key_name_prefix    = "meyerkev-local"
   create_private_key = true
