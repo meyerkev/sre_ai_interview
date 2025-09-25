@@ -1,0 +1,25 @@
+regions:
+- us-east-1
+- us-east-2
+- global
+
+account-blacklist:
+- "000000000000"
+
+accounts:
+  "386145735201":
+    filters:
+      IAMUser:
+      - "meyerkev"
+      IAMUserAccessKey:
+      - "meyerkev -> AKIAVT2AUKIQ2R3KB54F"
+      IAMUserPolicyAttachment:
+      - "meyerkev -> AdministratorAccess"
+
+resource-types:
+  excludes:
+    - IAMUserAccessKey
+    - IAMUser
+    - S3Bucket
+    # I have no idea what this is?
+    - OSPackage
