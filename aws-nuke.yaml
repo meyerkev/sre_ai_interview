@@ -3,7 +3,7 @@ regions:
 - us-east-2
 - global
 
-account-blacklist:
+blocklist:
 - "000000000000"
 
 accounts:
@@ -12,14 +12,17 @@ accounts:
       IAMUser:
       - "meyerkev"
       IAMUserAccessKey:
-      - "meyerkev -> AKIAVT2AUKIQ2R3KB54F"
+      - "meyerkev -> AKIAVT2AUKIQ6X5C3Z4H"
       IAMUserPolicyAttachment:
       - "meyerkev -> AdministratorAccess"
+      SecretsManagerSecret:
+      - "onyx-supabase-postgres"
 
 resource-types:
   excludes:
-    - IAMUserAccessKey
-    - IAMUser
     - S3Bucket
+    - S3Object
+    - IAMUser
+    - IAMUserAccessKey
     # I have no idea what this is?
     - OSPackage

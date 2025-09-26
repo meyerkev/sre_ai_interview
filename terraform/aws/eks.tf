@@ -42,19 +42,30 @@ module "vpc" {
 
   azs = local.availability_zones
 
+  enable_dns_hostnames = true
+  enable_ipv6          = true # Enable IPv6 across the VPC for EKS
+
   # TODO: Some regions have more than 4 AZ's
   public_subnets   = [for i, az in local.availability_zones : cidrsubnet(var.vpc_cidr, 8, i)]
   private_subnets  = [for i, az in local.availability_zones : cidrsubnet(var.vpc_cidr, 8, i + 4)]
   database_subnets = [for i, az in local.availability_zones : cidrsubnet(var.vpc_cidr, 8, i + 8)]
 
-  enable_dns_hostnames = true
+  # Make subnets dual-stack and ensure resources launched into them receive IPv6 addresses
+  public_subnet_assign_ipv6_address_on_creation   = true
+  private_subnet_assign_ipv6_address_on_creation  = true
+  database_subnet_assign_ipv6_address_on_creation = true
+
+  # Assign IPv6 CIDR blocks to subnets to enable DNS64
+  public_subnet_ipv6_prefixes   = [0, 1, 2]  # Use first 3 /64s for public subnets
+  private_subnet_ipv6_prefixes  = [4, 5, 6]  # Use next 3 /64s for private subnets
+  database_subnet_ipv6_prefixes = [8, 9, 10] # Use next 3 /64s for database subnets
 
   # Enable NAT Gateway
   # Expensive, but a requirement 
   enable_nat_gateway      = true
   single_nat_gateway      = true
   one_nat_gateway_per_az  = false
-  enable_vpn_gateway      = true
+  enable_vpn_gateway      = false
   map_public_ip_on_launch = true
 
   public_subnet_tags = {
@@ -73,13 +84,14 @@ module "eks-auth" {
   version = "~> 20.0"
 
   manage_aws_auth_configmap = true
-  aws_auth_users = concat(var.interviewee_name != null ? [
-    # Once again, this might not be ideal except in an interview setting
-    {
-      userarn  = aws_iam_user.interviewee[0].arn
-      username = aws_iam_user.interviewee[0].name
-      groups   = ["system:masters"]
-    }
+  aws_auth_users = concat(
+    var.interviewee_name != null ? [
+      # Once again, this might not be ideal except in an interview setting
+      {
+        userarn  = aws_iam_user.interviewee[0].arn
+        username = aws_iam_user.interviewee[0].name
+        groups   = ["system:masters"]
+      }
     ] : [],
     local.add_user ? [
       {
@@ -87,7 +99,23 @@ module "eks-auth" {
         username = data.aws_caller_identity.current.user_id
         groups   = ["system:masters"]
       }
-  ] : [])
+    ] : [],
+    [
+      {
+        userarn  = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        username = "root"
+        groups   = ["system:masters"]
+      }
+    ]
+  )
+
+  aws_auth_roles = [
+    for node_group in values(module.eks.eks_managed_node_groups) : {
+      rolearn  = node_group.iam_role_arn
+      username = "system:node:{{EC2PrivateDNSName}}"
+      groups   = ["system:bootstrappers", "system:nodes"]
+    }
+  ]
 
   depends_on = [null_resource.sleep]
 }
@@ -107,22 +135,35 @@ module "eks" {
   # Module v21 renamed inputs to align with upstream JSON; use `name`
   name               = var.cluster_name
   kubernetes_version = var.cluster_k8s_version
+  ip_family          = "ipv6"
 
   endpoint_public_access                   = true
   enable_cluster_creator_admin_permissions = true
 
   create_auto_mode_iam_resources = false
   compute_config                 = {}
+  create_cni_ipv6_iam_policy     = true
 
   addons = {
     coredns = {
       most_recent = true
     }
+    eks-pod-identity-agent = {
+      before_compute = true
+    }
     kube-proxy = {
       most_recent = true
     }
     vpc-cni = {
-      most_recent = true
+      most_recent    = true
+      before_compute = true
+      configuration_values = jsonencode({
+        env = {
+          ENABLE_IPV6              = "true"
+          ENABLE_PREFIX_DELEGATION = "true"
+          WARM_PREFIX_TARGET       = "1"
+        }
+      })
     }
     aws-ebs-csi-driver = {
       most_recent = true
@@ -149,7 +190,7 @@ module "eks" {
       instance_types             = [local.eks_node_instance_type]
       iam_role_attach_cni_policy = true
 
-      # v21 enables custom launch templates by default; disable to keep AWS defaults.
+      # Use AWS defaults with existing optimizations
       create_launch_template     = false
       use_custom_launch_template = false
 
@@ -168,6 +209,11 @@ module "eks" {
         "k8s.io/cluster-autoscaler/enabled"             = "true"
         "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
       }
+
+      iam_role_additional_policies = {
+        AmazonEBSCSIDriverPolicy = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+      }
+
     }
   }
 }
@@ -191,7 +237,8 @@ resource "aws_security_group" "remote_access" {
     to_port     = 65535
     protocol    = "tcp"
     # TODO: This is also bad and I would never do this in production
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
   }
 
   ingress {
@@ -200,7 +247,8 @@ resource "aws_security_group" "remote_access" {
     to_port     = 22
     protocol    = "tcp"
     # TODO: This is also bad and I would never do this in production
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
   }
 
   egress {
@@ -212,6 +260,71 @@ resource "aws_security_group" "remote_access" {
   }
 
   tags = { Name = "eks-remote" }
+}
+
+# VPC Endpoints for ECR - Dramatically improves image pull performance
+resource "aws_vpc_endpoint" "ecr_dkr" {
+  vpc_id              = module.vpc.vpc_id
+  service_name        = "com.amazonaws.${var.region}.ecr.dkr"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = module.vpc.private_subnets
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  private_dns_enabled = true
+
+  tags = {
+    Name = "${var.cluster_name}-ecr-dkr-endpoint"
+  }
+}
+
+resource "aws_vpc_endpoint" "ecr_api" {
+  vpc_id              = module.vpc.vpc_id
+  service_name        = "com.amazonaws.${var.region}.ecr.api"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = module.vpc.private_subnets
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  private_dns_enabled = true
+
+  tags = {
+    Name = "${var.cluster_name}-ecr-api-endpoint"
+  }
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = module.vpc.vpc_id
+  service_name      = "com.amazonaws.${var.region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = module.vpc.private_route_table_ids
+
+  tags = {
+    Name = "${var.cluster_name}-s3-endpoint"
+  }
+}
+
+# Security group for VPC endpoints
+resource "aws_security_group" "vpc_endpoints" {
+  name_prefix = "${var.cluster_name}-vpc-endpoints"
+  description = "Security group for VPC endpoints"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    description = "HTTPS from VPC"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [module.vpc.vpc_cidr_block]
+  }
+
+  egress {
+    description = "All outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.cluster_name}-vpc-endpoints"
+  }
 }
 
 resource "aws_ssm_parameter" "oidc_provider" {

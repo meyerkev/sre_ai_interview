@@ -61,6 +61,8 @@ echo "✨ Helm add-ons destroyed successfully!"
 echo "🗑️ Destroying EKS cluster..."
 cd ../aws
 terraform init $TERRAFORM_INIT_ARGS
+terraform state rm kubernetes_annotations.default >/dev/null 2>&1 || true
+terraform state rm module.eks-auth.kubernetes_config_map_v1_data.aws_auth >/dev/null 2>&1 || true
 terraform destroy -var "interviewee_name=${INTERVIEW_NAME}" -auto-approve
 
 echo "✨ EKS cluster destroyed successfully!"

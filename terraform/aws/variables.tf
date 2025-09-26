@@ -19,23 +19,18 @@ variable "vpc_cidr" {
 }
 
 variable "interviewee_name" {
-  type = string
+  type    = string
+  default = "sre-ai-interview"
 }
 
 variable "cluster_k8s_version" {
   type    = string
-  default = "1.29"
-}
-
-variable "public_nodes" {
-  type        = bool
-  default     = true
-  description = "If true, we put our nodes in public subnets for easier access"
+  default = "1.32"
 }
 
 variable "eks_node_instance_type" {
   type    = string
-  default = null # "m6g.large"
+  default = "c6in.2xlarge" # Upgraded from c5.2xlarge for better network performance (40 Gigabit vs 10 Gigabit)
 }
 
 variable "target_architecture" {
@@ -55,17 +50,14 @@ variable "max_nodes" {
 
 variable "desired_nodes" {
   type    = number
-  default = 3
+  default = 4
 }
 
 variable "node_disk_size" {
   type        = number
-  default     = 200
-  description = "Size of the EKS node disk in GB"
+  default     = 500
+  description = "Size of the EKS node disk in GB - Increased for large AI/ML container images"
 }
 
-variable "default_storage_class_type" {
-  type        = string
-  default     = "gp2"
-  description = "The EBS volume type to use for the default storage class (e.g. gp2, gp3)"
-}
+
+

@@ -6,7 +6,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-PROFILE="meyerkev-toybox"
+PROFILE="default"
 CONFIG="aws-nuke.yaml"
 DRY_RUN=1
 
@@ -63,13 +63,13 @@ echo "⚠️  aws-nuke is extremely destructive. Use disposable accounts only."
 echo "Config: $CONFIG"
 echo "Profile: $PROFILE"
 
-cmd=(aws-nuke -c "$CONFIG" --profile "$PROFILE")
+cmd=(aws-nuke run --config "$CONFIG" --profile "$PROFILE")
 
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "Running in DRY RUN mode (no resources will be deleted)."
 else
   echo "Running with DELETION ENABLED (--no-dry-run --force)."
-  cmd+=(--no-dry-run --force)
+  cmd+=(--no-dry-run --no-prompt)
 fi
 
 # Append any additional args for aws-nuke after '--'
@@ -80,3 +80,24 @@ fi
 echo "+ ${cmd[*]}"
 "${cmd[@]}"
 
+# clear out the statefiles from s3
+aws s3 rm s3://meyerkev-terraform-state/ --recursive
+
+# clear out every user who isn't me and their access keys
+aws iam list-users | jq -r '.Users[].UserName' | while read -r user; do
+  if [ "$user" != "meyerkev" ]; then
+    aws iam delete-user --user-name "$user"
+  fi
+done
+
+# clear out every user who isn't me and their access keys
+aws iam list-users | jq -r '.Users[].UserName' | while read -r user; do
+  if [ "$user" != "meyerkev" ]; then
+    # Clear the access keys first
+    aws iam list-access-keys --user-name "$user" | jq -r '.AccessKeyMetadata[].AccessKeyId' | while read -r key; do
+      aws iam delete-access-key --user-name "$user" --access-key-id "$key"
+    done
+
+    aws iam delete-user --user-name "$user"
+  fi
+done

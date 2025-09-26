@@ -3,19 +3,24 @@
 ## No
 terraform {
   required_version = "~> 1.13.3"
-  # Really you ought to clean this up and use a remote backend, but this is an interview and I spin this up A LOT, then run aws-nuke on the account
-  backend "local" {
-    path = "test-interview-helm.tfstate"
+  backend "s3" {
+    bucket = "meyerkev-terraform-state"
+    key    = "aws-helm/test-interview-helm.tfstate"
+    region = "us-east-2"
   }
 
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 6.34"
+      version = "~> 6.0"
     }
     helm = {
       source  = "hashicorp/helm"
       version = "~> 2.16"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.35"
     }
   }
 }
@@ -35,7 +40,7 @@ data "aws_eks_cluster" "cluster" {
 
 provider "kubernetes" {
   host                   = data.aws_eks_cluster.cluster.endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority.0.data)
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data)
   exec {
     api_version = "client.authentication.k8s.io/v1beta1"
     args        = ["eks", "get-token", "--region", var.aws_region, "--cluster-name", var.eks_cluster_name]
@@ -46,7 +51,7 @@ provider "kubernetes" {
 provider "helm" {
   kubernetes {
     host                   = data.aws_eks_cluster.cluster.endpoint
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority.0.data)
+    cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data)
     exec {
       api_version = "client.authentication.k8s.io/v1beta1"
       args        = ["eks", "get-token", "--region", var.aws_region, "--cluster-name", var.eks_cluster_name]

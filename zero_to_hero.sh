@@ -3,18 +3,13 @@ set -eo pipefail
 
 cd $(dirname $0)
 
+
+
 echo "🚀 Starting zero to hero deployment..."
 
 # Optional: choose interview/ECR repo name and bootstrap backend key
 INTERVIEW_NAME="sre-ai-interview"
-
-# Get the first argument after -- if it exists
-for ((i=1; i<=$#; i++)); do
-  if [[ "${!i}" == "--" ]] && [[ $((i+1)) -le $# ]]; then
-    INTERVIEW_NAME="${!((i+1))}"
-    break
-  fi
-done
+GITHUB_REPOSITORY="meyerkev/onyx"
 
 BOOTSTRAP_STATE_KEY="${INTERVIEW_NAME}-bootstrap-ecr.tfstate"
 TERRAFORM_INIT_UPGRADE='-upgrade'
@@ -24,23 +19,39 @@ while [[ $# -gt 0 ]]; do
     --bootstrap-state-key)
       BOOTSTRAP_STATE_KEY="$2"; shift 2 ;;
     --upgrade)
-      TERRAFORM_INIT_UPGRADE='-upgrade' ;;
+      TERRAFORM_INIT_UPGRADE='-upgrade'; shift ;;
     --no-upgrade)
-      TERRAFORM_INIT_UPGRADE='' ;;
+      TERRAFORM_INIT_UPGRADE=''; shift ;;
+    --supabase-connection-string)
+      SUPABASE_CONNECTION_STRING="$2"; shift 2 ;;
+    --github-repository)
+      GITHUB_REPOSITORY="$2"; shift 2 ;;
+    --github-oidc-subject)
+      GITHUB_OIDC_SUBJECT="$2"; shift 2 ;;
+    --)
+      shift; INTERVIEW_NAME="$1"; shift ;;
     -h|--help)
-      echo "Usage: $0 [--upgrade] [-- <interview-name>]";
-      echo "       [--bootstrap-state-key <s3/key/path.tfstate>]";
-      echo "       --no-upgrade   Run terraform init without -upgrade";
-      echo "       --upgrade       Run terraform init with -upgrade (default)";
-      echo "Example: $0 --upgrade -- acme-takehome --bootstrap-state-key interviews/acme/bootstrap-ecr.tfstate"; exit 0 ;;
-    --) shift; shift ;;  # Skip the -- and the interview name
-    *) 
-      if [[ "$1" != "--bootstrap-state-key" ]]; then
+      echo "Usage: $0 [--upgrade] [--supabase-connection-string <postgres url>] [--github-repository owner/repo] [--github-oidc-subject subject] [--bootstrap-state-key <s3/key>] [-- <interview-name>]";
+      echo "Environment variables:";
+      echo "  GITHUB_PAT - GitHub Personal Access Token for runner registration";
+      exit 0 ;;
+    *)
+      if [[ "$1" == -* ]]; then
         echo "Unknown argument: $1" >&2; exit 1
-      fi ;;
+      fi
+      INTERVIEW_NAME="$1"; shift ;;
   esac
-  shift
 done
+
+if [ -n "${SUPABASE_CONNECTION_STRING:-}" ]; then
+  echo "🔐 Ensuring Supabase secret is populated..."
+  aws secretsmanager put-secret-value \
+    --secret-id onyx-supabase-postgres \
+    --secret-string "${SUPABASE_CONNECTION_STRING}" >/dev/null 2>&1 || \
+  aws secretsmanager create-secret \
+    --name onyx-supabase-postgres \
+    --secret-string "${SUPABASE_CONNECTION_STRING}" >/dev/null
+fi
 
 TERRAFORM_INIT_ARGS="$TERRAFORM_INIT_UPGRADE"
 if [ ! -z "$TF_STATE_BUCKET" ]; then
@@ -74,11 +85,39 @@ if [ -n "$BOOTSTRAP_STATE_KEY" ]; then
   BOOTSTRAP_INIT_ARGS="$BOOTSTRAP_INIT_ARGS --backend-config=key=$BOOTSTRAP_STATE_KEY"
 fi
 terraform init $BOOTSTRAP_INIT_ARGS
-terraform apply -auto-approve -var "interview_name=${INTERVIEW_NAME}"
+# Build terraform var args for bootstrap
+BOOTSTRAP_VAR_ARGS="-var interview_name=${INTERVIEW_NAME} -var github_repository=${GITHUB_REPOSITORY:-} -var github_oidc_subject=${GITHUB_OIDC_SUBJECT:-ref:refs/heads/main}"
+
+# Enable GitHub runner by default and add token if provided
+BOOTSTRAP_VAR_ARGS="$BOOTSTRAP_VAR_ARGS -var github_runner_enabled=true"
+if [ -n "${GITHUB_PAT:-}" ]; then
+  BOOTSTRAP_VAR_ARGS="$BOOTSTRAP_VAR_ARGS -var github_runner_token=${GITHUB_PAT}"
+fi
+
+terraform apply -auto-approve $BOOTSTRAP_VAR_ARGS
 
 # Surface which ECR repository is being used
-ECR_REPO_URL=$(terraform output -raw ecr_repository_url)
-echo "📦 Using ECR repository: ${ECR_REPO_URL} (name: ${INTERVIEW_NAME})"
+ECR_REPO_URLS=$(terraform output -json ecr_repository_urls | tr -d '\n')
+GITHUB_CI_ROLE_ARN=$(terraform output -raw github_ci_role_arn 2>/dev/null || echo "")
+if [ -n "${GITHUB_CI_ROLE_ARN}" ]; then
+  echo "🔐 GitHub CI role: ${GITHUB_CI_ROLE_ARN}"
+fi
+echo "📦 Available ECR repositories:"
+echo "${ECR_REPO_URLS}" | jq -r 'to_entries[] | "  - \(.key): \(.value)"'
+
+# Check GitHub runner status
+GITHUB_RUNNER_INSTANCE_ID=$(terraform output -raw github_runner_instance_id 2>/dev/null || echo "")
+if [ -n "${GITHUB_RUNNER_INSTANCE_ID}" ]; then
+  echo "GitHub self-hosted runner created: ${GITHUB_RUNNER_INSTANCE_ID}"
+  if [ -n "${GITHUB_PAT:-}" ]; then
+    echo "   Runner configured with provided GitHub token"
+  else
+    echo "   WARNING: No GitHub token provided - runner may not register successfully"
+    echo "   TIP: Set GITHUB_PAT environment variable for automatic registration"
+  fi
+else
+  echo "WARNING: GitHub runner not created (github_runner_enabled=false or creation failed)"
+fi
 
 echo "✨ Bootstrap Infrastructure created successfully!"
 
@@ -89,61 +128,30 @@ cd ../aws
 terraform init $TERRAFORM_INIT_ARGS
 terraform apply -var "interviewee_name=${INTERVIEW_NAME}" -auto-approve
 
+# Capture key outputs we need for downstream steps
+CLUSTER_NAME=$(terraform output -raw cluster_name)
+AWS_REGION=$(terraform output -raw aws_default_region)
+
 echo "✨ EKS cluster initialized successfully!"
 
 # update kubeconfig
 $(terraform output -raw kubeconfig_command)
+# Set the default namespsace to onyx
+kubectl config set-context --current --namespace=onyx
 
 # And install helm
 cd ../aws-helm
 terraform init $TERRAFORM_INIT_ARGS
-terraform apply -auto-approve
 
-# Build/push app image and deploy (only if ./app exists two levels up)
-if [ -d "../../app" ]; then
-  echo "🐳 Building and pushing Docker image..."
-  cd ../../app
-  make build push
-  IMAGE_ID=$(make output-image-id)
-
-  echo "🔍 Image ID: $IMAGE_ID"
-
-  cd ../terraform
-  terraform init $TERRAFORM_INIT_ARGS
-  terraform apply -var "docker_image=$IMAGE_ID" -var "ecr_repository_url=$ECR_REPO_URL" $TFVARS -auto-approve
-
-  timeout=300  # 5 minutes in seconds
-  start_time=$(date +%s)
-  end_time=$((start_time + timeout))
-
-  current_time=$(date +%s)
-  while ! curl -s $(terraform output -raw instance_ip) > /dev/null; do
-      current_time=$(date +%s)
-      if [ $current_time -ge $end_time ]; then
-          echo "Timeout reached after 5 minutes. Application may not be ready."
-          break
-      fi
-      echo "Waiting for application to start... $(date)"
-      sleep 10
-  done
-
-  EXIT_CODE=0
-  if [ $current_time -ge $end_time ]; then
-      echo "Timeout reached after 5 minutes. Application may not be ready."
-      EXIT_CODE=1
-  else
-      echo "🎉 Deployment complete!"
-  fi
-
-  echo "🔑 To SSH into the instance, run:"
-  echo "    $(terraform output -raw ssh_key_commands)"
-
-  echo
-  echo "🔍 You can access the application at: http://$(terraform output -raw instance_ip)"
-
-  exit $EXIT_CODE
-else
-  echo "ℹ️ No ./app found. Skipping image build and app deployment."
-  echo "   ECR repository is ready: ${ECR_REPO_URL}"
-  exit 0
+HELM_VAR_ARGS="-var eks_cluster_name=${CLUSTER_NAME} -var aws_region=${AWS_REGION}"
+if [ -n "${ROUTE53_ZONE_ID:-}" ]; then
+  HELM_VAR_ARGS="$HELM_VAR_ARGS -var route53_zone_id=${ROUTE53_ZONE_ID}"
 fi
+# Local chart usage: Uncomment and adjust CHART_PATH if you plan to maintain
+# a checked-in copy of the Onyx chart (per step 3 of the plan).
+# Example:
+# if [ -n "${LOCAL_HELM_CHART_PATH:-}" ]; then
+#   HELM_VAR_ARGS="$HELM_VAR_ARGS -var \"onyx_chart_path=${LOCAL_HELM_CHART_PATH}\""
+#   echo "📦 Using local Onyx Helm chart at ${LOCAL_HELM_CHART_PATH}"
+# fi
+terraform apply -auto-approve $HELM_VAR_ARGS
