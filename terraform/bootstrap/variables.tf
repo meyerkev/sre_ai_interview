@@ -61,8 +61,3 @@ variable "github_runner_disk_size" {
   default     = 200
 }
 
-variable "github_runner_key_name" {
-  description = "EC2 key pair name for SSH access to the runner (optional)"
-  type        = string
-  default     = null
-}

@@ -119,7 +119,7 @@ resource "aws_launch_template" "github_runner" {
   name_prefix   = "${var.interview_name}-github-runner-"
   image_id      = data.aws_ami.ubuntu[0].id
   instance_type = var.github_runner_instance_type
-  key_name      = var.github_runner_key_name
+  key_name      = "gitlab"
 
   vpc_security_group_ids = [aws_security_group.github_runner[0].id]
 
@@ -170,6 +170,16 @@ resource "aws_autoscaling_group" "github_runner" {
   launch_template {
     id      = aws_launch_template.github_runner[0].id
     version = "$Latest"
+  }
+
+  instance_refresh {
+    strategy = "Rolling"
+
+    preferences {
+      min_healthy_percentage = 90
+      instance_warmup        = 300
+      skip_matching          = true
+    }
   }
 
   tag {

@@ -97,6 +97,7 @@ aws iam list-users | jq -r '.Users[].UserName' | while read -r user; do
     aws iam list-access-keys --user-name "$user" | jq -r '.AccessKeyMetadata[].AccessKeyId' | while read -r key; do
       aws iam delete-access-key --user-name "$user" --access-key-id "$key"
     done
+    sleep 3
 
     aws iam delete-user --user-name "$user"
   fi

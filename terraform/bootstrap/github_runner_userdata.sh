@@ -16,7 +16,8 @@ apt-get install -y \
     ca-certificates \
     curl \
     gnupg \
-    lsb-release
+    lsb-release \
+    jq
 
 mkdir -p /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -50,11 +51,23 @@ echo "Extracting runner..."
 tar xzf ./actions-runner-linux-x64-$${RUNNER_VERSION}.tar.gz
 chown -R ubuntu:ubuntu /home/ubuntu
 
-# Configure the runner as ubuntu user
+# Configure the runner as ubuntu user (fetch registration token dynamically)
 echo "Configuring runner for repository: ${github_repository}"
 echo "Runner name: ${runner_name}"
 echo "Runner labels: ${runner_labels}"
-sudo -u ubuntu bash -c 'cd /home/ubuntu && ./config.sh --url https://github.com/${github_repository} --token ${github_token} --name ${runner_name}-$(date +%s) --labels ${runner_labels} --unattended'
+
+REGISTER_TOKEN=$(curl -sf -X POST \
+  -H "Accept: application/vnd.github+json" \
+  -H "Authorization: Bearer ${github_token}" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  https://api.github.com/repos/${github_repository}/actions/runners/registration-token | jq -r '.token')
+
+if [ -z "$${REGISTER_TOKEN}" ] || [ "$${REGISTER_TOKEN}" = "null" ]; then
+  echo "Failed to obtain GitHub registration token"
+  exit 1
+fi
+
+sudo -u ubuntu bash -c "cd /home/ubuntu && ./config.sh --url https://github.com/${github_repository} --token $${REGISTER_TOKEN} --name ${runner_name}-$(date +%s) --labels ${runner_labels} --unattended"
 
 # Install the service
 echo "Installing and starting runner service..."
