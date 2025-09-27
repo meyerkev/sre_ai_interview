@@ -4,8 +4,8 @@ locals {
     # "external-dns"                 = "external-dns"
     "cluster-autoscaler" = "cluster-autoscaler"
     "metrics-server"     = "kube-system"
-    # "argocd"             = "argocd"
-    "onyx" = "onyx"
+    "argocd"             = "argocd"
+    "onyx"               = "onyx"
   }
 
   service_accounts = {
@@ -450,4 +450,13 @@ resource "kubernetes_secret" "supabase_postgres" {
   type = "Opaque"
 
   depends_on = [kubernetes_namespace.namespaces]
+}
+
+# argo
+resource "helm_release" "argo-cd" {
+  name       = "argo-cd"
+  repository = "https://argoproj.github.io/argo-helm"
+  chart      = "argo-cd"
+  namespace  = local.namespaces["argocd"]
+  version    = "8.5.6"
 }
