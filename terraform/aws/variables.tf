@@ -30,7 +30,7 @@ variable "cluster_k8s_version" {
 
 variable "eks_node_instance_type" {
   type    = string
-  default = "c6in.4xlarge" # Upgraded from c5.2xlarge for better network performance (40 Gigabit vs 10 Gigabit)
+  default = "c6in.8xlarge" # Upgraded from c5.2xlarge for better network performance (40 Gigabit vs 10 Gigabit)
 }
 
 variable "target_architecture" {
