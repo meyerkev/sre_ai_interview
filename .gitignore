@@ -36,3 +36,4 @@ terraform.rc
 
 id_rsa
 id_rsa.pub
+helm/onyx/charts/onyx/charts

@@ -25,12 +25,12 @@ variable "interviewee_name" {
 
 variable "cluster_k8s_version" {
   type    = string
-  default = "1.32"
+  default = "1.33"
 }
 
 variable "eks_node_instance_type" {
   type    = string
-  default = "c6in.2xlarge" # Upgraded from c5.2xlarge for better network performance (40 Gigabit vs 10 Gigabit)
+  default = "c6in.4xlarge" # Upgraded from c5.2xlarge for better network performance (40 Gigabit vs 10 Gigabit)
 }
 
 variable "target_architecture" {
@@ -57,6 +57,18 @@ variable "node_disk_size" {
   type        = number
   default     = 500
   description = "Size of the EKS node disk in GB - Increased for large AI/ML container images"
+}
+
+variable "ebs_csi_driver_policy_arn" {
+  description = "IAM policy ARN to attach for EBS CSI driver permissions"
+  type        = string
+  default     = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+variable "ebs_csi_role_name" {
+  description = "Name of the IAM role for the EBS CSI driver"
+  type        = string
+  default     = "eks-ebs-csi-driver"
 }
 
 

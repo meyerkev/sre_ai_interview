@@ -12,7 +12,14 @@ data:
         server {{ include "onyx.fullname" . }}-webserver:{{ .Values.webserver.service.servicePort }} fail_timeout=0;
     }
 
+    {{- $extraEnv := dict -}}
+    {{- range $item := .Values.nginx.extraEnvVars -}}
+    {{- $_ := set $extraEnv $item.name $item.value -}}
+    {{- end -}}
     server {
+        {{- if hasKey $extraEnv "LISTEN_ADDRESS" }}
+        listen [::]:1024;
+        {{- end }}
         listen 1024;
         server_name $$DOMAIN;
 

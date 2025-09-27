@@ -84,7 +84,7 @@ BOOTSTRAP_INIT_ARGS="$TERRAFORM_INIT_ARGS"
 if [ -n "$BOOTSTRAP_STATE_KEY" ]; then
   BOOTSTRAP_INIT_ARGS="$BOOTSTRAP_INIT_ARGS --backend-config=key=$BOOTSTRAP_STATE_KEY"
 fi
-terraform init $BOOTSTRAP_INIT_ARGS
+# terraform init $BOOTSTRAP_INIT_ARGS
 # Build terraform var args for bootstrap
 BOOTSTRAP_VAR_ARGS="-var interview_name=${INTERVIEW_NAME} -var github_repository=${GITHUB_REPOSITORY:-} -var github_oidc_subject=${GITHUB_OIDC_SUBJECT:-ref:refs/heads/main}"
 
@@ -125,7 +125,7 @@ echo "✨ Bootstrap Infrastructure created successfully!"
 echo "📦 Initializing EKS cluster..."
 cd ../aws
 # Init with the bucket we just created, but the standard key from that module
-terraform init $TERRAFORM_INIT_ARGS
+# terraform init $TERRAFORM_INIT_ARGS
 terraform apply -var "interviewee_name=${INTERVIEW_NAME}" -auto-approve
 
 # Capture key outputs we need for downstream steps
@@ -141,7 +141,7 @@ kubectl config set-context --current --namespace=onyx
 
 # And install helm
 cd ../aws-helm
-terraform init $TERRAFORM_INIT_ARGS
+#$ terraform init $TERRAFORM_INIT_ARGS
 
 HELM_VAR_ARGS="-var eks_cluster_name=${CLUSTER_NAME} -var aws_region=${AWS_REGION}"
 if [ -n "${ROUTE53_ZONE_ID:-}" ]; then
@@ -154,4 +154,31 @@ fi
 #   HELM_VAR_ARGS="$HELM_VAR_ARGS -var \"onyx_chart_path=${LOCAL_HELM_CHART_PATH}\""
 #   echo "📦 Using local Onyx Helm chart at ${LOCAL_HELM_CHART_PATH}"
 # fi
+
+echo "terraform apply -auto-approve $HELM_VAR_ARGS"
 terraform apply -auto-approve $HELM_VAR_ARGS
+
+echo "⏳ Waiting for NLB to provision (up to 5 minutes)..."
+
+# Wait for NLB to be ready
+for i in {1..30}; do
+  NLB_HOSTNAME=$(kubectl get svc onyx-nginx -n onyx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+  if [ -n "$NLB_HOSTNAME" ]; then
+    echo "✅ NLB provisioned: $NLB_HOSTNAME"
+    break
+  fi
+  echo "⏳ NLB not ready yet, waiting... (attempt $i/30)"
+  sleep 10
+done
+
+if [ -n "$NLB_HOSTNAME" ]; then
+  echo ""
+  echo "🎉 Onyx is ready!"
+  echo "🌐 Web UI: http://$NLB_HOSTNAME"
+  echo "🔗 API: http://$NLB_HOSTNAME/api"
+  echo ""
+else
+  echo "⚠️  NLB not ready after 5 minutes. Check service status:"
+  echo "   kubectl get svc onyx-nginx -n onyx"
+  echo "   kubectl describe svc onyx-nginx -n onyx"
+fi

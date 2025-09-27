@@ -45,7 +45,34 @@ resource "aws_iam_user_policy" "kubeconfig" {
 EOF
 }
 
-# Add an IAM keypair for the interviewee
+resource "aws_iam_role" "ebs_csi" {
+  name = var.ebs_csi_role_name
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Principal = {
+          Federated = module.eks.oidc_provider_arn
+        }
+        Condition = {
+          StringEquals = {
+            "${replace(module.eks.cluster_oidc_issuer_url, "https://", "")}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = var.ebs_csi_driver_policy_arn
+}
+
+# Add an IAM keypair for the interviewee (used in interview flow)
 resource "aws_iam_access_key" "interviewee_key" {
   count = var.interviewee_name != null ? 1 : 0
   user  = aws_iam_user.interviewee[0].name

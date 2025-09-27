@@ -1,11 +1,3 @@
-output "interviewee_access_key" {
-  value = try(aws_iam_access_key.interviewee_key[0].id, null)
-}
-
-output "interviewee_secret_key" {
-  value = try(nonsensitive(aws_iam_access_key.interviewee_key[0].secret), null)
-}
-
 output "cluster_name" {
   value = try(module.eks.cluster_name, null)
 }

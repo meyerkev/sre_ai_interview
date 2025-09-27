@@ -4,8 +4,8 @@ locals {
     # "external-dns"                 = "external-dns"
     "cluster-autoscaler" = "cluster-autoscaler"
     "metrics-server"     = "kube-system"
-    "argocd"             = "argocd"
-    "onyx"               = "onyx"
+    # "argocd"             = "argocd"
+    "onyx" = "onyx"
   }
 
   service_accounts = {
@@ -47,7 +47,6 @@ locals {
     database = nonsensitive(regex("postgresql://(?P<user>[^:]+):(?P<password>[^@]+)@(?P<host>[^:]+):(?P<port>[0-9]+)/(?P<database>.+)", local.supabase_connection_string).database)
   }
 }
-
 
 resource "kubernetes_namespace" "namespaces" {
   for_each = { for namespace, value in local.namespaces : namespace => value if value != "kube-system" }
@@ -92,6 +91,47 @@ module "aws-load-balancer-irsa" {
   }
 }
 
+resource "helm_release" "aws-load-balancer-controller" {
+  name       = "aws-load-balancer-controller"
+  repository = "https://aws.github.io/eks-charts"
+  chart      = "aws-load-balancer-controller"
+  namespace  = local.namespaces["aws-load-balancer-controller"]
+  version    = "1.5.3"
+
+  wait = true
+
+  set {
+    name  = "clusterName"
+    value = var.eks_cluster_name
+  }
+
+  set {
+    name  = "serviceAccount.create"
+    value = "false"
+  }
+
+  set {
+    name  = "serviceAccount.name"
+    value = local.service_accounts.aws-load-balancer-controller
+  }
+
+  set {
+    name  = "region"
+    value = var.aws_region
+  }
+
+  set {
+    name  = "vpcId"
+    value = data.aws_eks_cluster.cluster.vpc_config[0].vpc_id
+  }
+
+  set {
+    name  = "replicaCount"
+    value = 1
+  }
+  depends_on = [kubernetes_service_account.service_accounts]
+}
+
 /*
 module "external-dns-irsa" {
   source          = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts"
@@ -128,55 +168,77 @@ module "aws-cluster-autoscaler-irsa" {
   }
 }
 
-resource "helm_release" "aws-load-balancer-controller" {
-  name       = "aws-load-balancer-controller"
-  repository = "https://aws.github.io/eks-charts"
-  chart      = "aws-load-balancer-controller"
-  namespace  = local.namespaces["aws-load-balancer-controller"]
-  version    = "1.5.3"
-
-  wait = true
-
-  set {
-    name  = "clusterName"
-    value = var.eks_cluster_name
-  }
-
-  set {
-    name  = "serviceAccount.create"
-    value = "false"
-  }
-
-  set {
-    name  = "serviceAccount.name"
-    value = local.service_accounts.aws-load-balancer-controller
-  }
-  depends_on = [kubernetes_service_account.service_accounts]
+data "aws_vpc" "eks_vpc" {
+  id = data.aws_eks_cluster.cluster.vpc_config[0].vpc_id
 }
 
-/*
-resource "helm_release" "external-dns" {
-  name       = "external-dns"
-  repository = "https://charts.bitnami.com/bitnami"
-  chart      = "external-dns"
-  namespace  = local.namespaces["external-dns"]
-  version    = "6.20.3"
+# Security group for public ALB access
+resource "aws_security_group" "alb_public" {
+  name_prefix = "onyx-alb-public"
+  description = "Security group for public ALB access to Onyx"
+  vpc_id      = data.aws_vpc.eks_vpc.id
 
-  wait = true
-
-  set {
-    name  = "serviceAccount.create"
-    value = "false"
+  ingress {
+    description      = "HTTP from anywhere"
+    from_port        = 80
+    to_port          = 80
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
   }
 
-  set {
-    name  = "serviceAccount.name"
-    value = local.service_accounts.external-dns
+  ingress {
+    description      = "HTTPS from anywhere"
+    from_port        = 443
+    to_port          = 443
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
   }
 
-  depends_on = [kubernetes_service_account.service_accounts]
+  egress {
+    description      = "All outbound traffic"
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  tags = {
+    Name = "onyx-alb-public"
+  }
 }
-*/
+
+# Security group rule to allow ALB to reach EKS nodes
+resource "aws_security_group_rule" "alb_to_nodes" {
+  type                     = "ingress"
+  from_port                = 0
+  to_port                  = 65535
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb_public.id
+  security_group_id        = data.aws_eks_cluster.cluster.vpc_config[0].cluster_security_group_id
+}
+
+# Allow ALB to reach pods on nginx port via cluster security group
+resource "aws_security_group_rule" "alb_to_cluster_http" {
+  type                     = "ingress"
+  from_port                = 80
+  to_port                  = 80
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb_public.id
+  security_group_id        = data.aws_eks_cluster.cluster.vpc_config[0].cluster_security_group_id
+}
+
+# Allow ALB to reach nginx container port
+resource "aws_security_group_rule" "alb_to_cluster_nginx" {
+  type                     = "ingress"
+  from_port                = 1024
+  to_port                  = 1024
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb_public.id
+  security_group_id        = data.aws_eks_cluster.cluster.vpc_config[0].cluster_security_group_id
+}
 
 resource "helm_release" "cluster-autoscaler" {
   name       = "cluster-autoscaler"
@@ -222,297 +284,170 @@ resource "helm_release" "metrics-server" {
 
 }
 
-# Create a Kubernetes Service for the dual-stack proxy (if enabled)
-resource "helm_release" "argocd" {
-  name       = "argocd"
-  repository = "https://argoproj.github.io/argo-helm"
-  chart      = "argo-cd"
-  namespace  = local.namespaces["argocd"]
-  version    = "5.46.8"
+# # Create a Kubernetes Service for the dual-stack proxy (if enabled)
+# resource "helm_release" "argocd" {
+#   name       = "argocd"
+#   repository = "https://argoproj.github.io/argo-helm"
+#   chart      = "argo-cd"
+#   namespace  = local.namespaces["argocd"]
+#   version    = "5.46.8"
 
-  wait             = true
-  create_namespace = true
-  timeout          = 600
+#   wait             = true
+#   create_namespace = true
+#   timeout          = 600
 
-  values = [
-    yamlencode({
-      server = {
-        service = {
-          type = "LoadBalancer"
-        }
-        insecure = true
-      }
-    })
-  ]
+#   values = [
+#     yamlencode({
+#       server = {
+#         service = {
+#           type = "LoadBalancer"
+#         }
+#         insecure = true
+#       }
+#     })
+#   ]
 
-  depends_on = [kubernetes_namespace.namespaces]
+#   depends_on = [kubernetes_namespace.namespaces, data.kubernetes_service.aws_load_balancer_webhook]
+# }
+
+resource "null_resource" "onyx_dependencies" {
+  provisioner "local-exec" {
+    command     = "helm dependency update ../../helm/onyx/charts/onyx"
+    working_dir = path.module
+  }
+
+  triggers = {
+    chart_hash = filesha256("${path.module}/../../helm/onyx/charts/onyx/Chart.yaml")
+  }
 }
 
 resource "helm_release" "onyx" {
-  recreate_pods = true
   name          = "onyx"
-  chart         = "onyx"
+  recreate_pods = true
+  chart         = "${path.module}/../../helm/onyx/charts/onyx"
   namespace     = local.namespaces["onyx"]
-  repository    = "file://${path.module}/../../helm/onyx/charts"
 
-  # wait             = true
+  wait             = true
   create_namespace = false
   timeout          = 300
   skip_crds        = false
 
-  set {
-    name  = "postgresql.enabled"
-    value = "false"
+  values = [<<EOF
+nginx:
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb-ip"
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+      service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "Name=onyx-nlb"
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: HTTP
+      service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: HTTP
+      service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/"
+      service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "traffic-port"
+      service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+  extraEnvVars:
+    - name: DOMAIN
+      value: localhost
+    - name: LISTEN_ADDRESS
+      value: "::"
+  ingress:
+    enabled: false
+minio:
+  resourcesPreset: "none"
+  console:
+    enabled: false
+
+configMap:
+  POSTGRES_API_SERVER_POOL_SIZE: "15"
+  POSTGRES_API_SERVER_POOL_OVERFLOW: "10"
+  POSTGRES_CONNECT_TIMEOUT: "60"
+  POSTGRES_POOL_TIMEOUT: "60"
+  ASYNCPG_STATEMENT_CACHE_SIZE: "0"
+
+api:
+  replicaCount: 1
+  image:
+    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend
+    tag: "main"
+    pullPolicy: "Always"
+  extraEnv:
+    - name: POSTGRES_USER
+      value: ${local.supabase_connection_parts.user}
+    - name: POSTGRES_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: onyx-supabase-secret
+          key: postgres_password
+    - name: POSTGRES_HOST
+      value: ${local.supabase_connection_parts.host}
+    - name: POSTGRES_PORT
+      value: ${local.supabase_connection_parts.port}
+    - name: POSTGRES_DB
+      value: ${local.supabase_connection_parts.database}
+    - name: POSTGRES_API_SERVER_POOL_SIZE
+      value: "15"
+    - name: POSTGRES_API_SERVER_POOL_OVERFLOW
+      value: "10"
+    - name: ASYNCPG_STATEMENT_CACHE_SIZE
+      value: "0"
+
+inferenceCapability:
+  image:
+    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server
+    tag: "main"
+    pullPolicy: "Always"
+  containerPorts:
+    server: 9000
+
+indexCapability:
+  image:
+    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server
+    tag: "main"
+    pullPolicy: "Always"
+
+webserver:
+  image:
+    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-web
+    tag: "main"
+    pullPolicy: "Always"
+
+celery_shared:
+  image:
+    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend
+    tag: "main"
+    pullPolicy: "Always"
+
+slackbot:
+  image:
+    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend
+    tag: "main"
+    pullPolicy: "Always"
+
+model_server:
+  image:
+    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server
+    tag: "main"
+    pullPolicy: "Always"
+
+EOF
+  ]
+
+  depends_on = [kubernetes_namespace.namespaces, null_resource.onyx_dependencies, kubernetes_secret.supabase_postgres, helm_release.aws-load-balancer-controller]
+}
+
+# Create Kubernetes secret for Supabase database credentials
+resource "kubernetes_secret" "supabase_postgres" {
+  metadata {
+    name      = "onyx-supabase-secret"
+    namespace = local.namespaces["onyx"]
   }
 
-  set {
-    name  = "api.replicaCount"
-    value = "1"
+  data = {
+    postgres_password = local.supabase_connection_parts.password
   }
 
-  set {
-    name  = "auth.postgresql.enabled"
-    value = "false"
-  }
-
-  set {
-    name  = "minio.consoleService.ports.http"
-    value = "9090"
-  }
-
-  set {
-    name  = "minio.consoleService.readinessProbe.httpGet.path"
-    value = "/"
-  }
-
-  set {
-    name  = "minio.resourcesPreset"
-    value = "none"
-  }
-
-  # Database connection pool settings for Supabase
-  set {
-    name  = "configMap.POSTGRES_API_SERVER_POOL_SIZE"
-    value = "5"
-  }
-
-  set {
-    name  = "configMap.POSTGRES_API_SERVER_POOL_OVERFLOW"
-    value = "3"
-  }
-
-  # Fix pgbouncer prepared statement issue
-  set {
-    name  = "configMap.ASYNCPG_STATEMENT_CACHE_SIZE"
-    value = "0"
-  }
-
-  # Use ECR repositories for faster image pulls
-  set {
-    name  = "api.image.repository"
-    value = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend"
-  }
-
-  set {
-    name  = "api.image.tag"
-    value = "main"
-  }
-
-  set {
-    name  = "api.image.pullPolicy"
-    value = "Always"
-  }
-
-  set {
-    name  = "inferenceCapability.image.repository"
-    value = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server"
-  }
-
-  set {
-    name  = "inferenceCapability.image.tag"
-    value = "main"
-  }
-
-  set {
-    name  = "inferenceCapability.image.pullPolicy"
-    value = "Always"
-  }
-
-  set {
-    name  = "indexCapability.image.repository"
-    value = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server"
-  }
-
-  set {
-    name  = "indexCapability.image.tag"
-    value = "main"
-  }
-
-  set {
-    name  = "indexCapability.image.pullPolicy"
-    value = "Always"
-  }
-
-  set {
-    name  = "webserver.image.repository"
-    value = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-web"
-  }
-
-  set {
-    name  = "webserver.image.tag"
-    value = "main"
-  }
-
-  set {
-    name  = "webserver.image.pullPolicy"
-    value = "Always"
-  }
-
-  set {
-    name  = "webserver.image.pullPolicy"
-    value = "Always"
-  }
-
-  set {
-    name  = "celery_shared.image.repository"
-    value = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend"
-  }
-
-  set {
-    name  = "celery_shared.image.tag"
-    value = "main"
-  }
-
-  set {
-    name  = "celery_shared.image.pullPolicy"
-    value = "Always"
-  }
-
-  set {
-    name  = "slackbot.image.repository"
-    value = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend"
-  }
-
-  set {
-    name  = "slackbot.image.tag"
-    value = "main"
-  }
-
-  set {
-    name  = "slackbot.image.pullPolicy"
-    value = "Always"
-  }
-
-  # Use ECR for model server as well
-  set {
-    name  = "model_server.image.repository"
-    value = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server"
-  }
-
-  set {
-    name  = "model_server.image.tag"
-    value = "main"
-  }
-
-  set {
-    name  = "model_server.image.pullPolicy"
-    value = "Always"
-  }
-
-
-  dynamic "set" {
-    for_each = [
-      {
-        name  = "configMap.POSTGRES_USER"
-        value = local.supabase_connection_parts.user
-      },
-      {
-        name  = "configMap.POSTGRES_PASSWORD"
-        value = local.supabase_connection_parts.password
-      },
-      {
-        name  = "configMap.POSTGRES_HOST"
-        value = local.supabase_connection_parts.host
-      },
-      {
-        name  = "configMap.POSTGRES_PORT"
-        value = local.supabase_connection_parts.port
-      },
-      {
-        name  = "configMap.POSTGRES_DB"
-        value = local.supabase_connection_parts.database
-      },
-      {
-        name  = "api.extraEnv[0].name"
-        value = "POSTGRES_USER"
-      },
-      {
-        name  = "api.extraEnv[0].value"
-        value = local.supabase_connection_parts.user
-      },
-      {
-        name  = "api.extraEnv[1].name"
-        value = "POSTGRES_PASSWORD"
-      },
-      {
-        name  = "api.extraEnv[1].value"
-        value = local.supabase_connection_parts.password
-      },
-      {
-        name  = "api.extraEnv[2].name"
-        value = "POSTGRES_HOST"
-      },
-      {
-        name  = "api.extraEnv[2].value"
-        value = local.supabase_connection_parts.host
-      },
-      {
-        name  = "api.extraEnv[3].name"
-        value = "POSTGRES_PORT"
-      },
-      {
-        name  = "api.extraEnv[3].value"
-        value = local.supabase_connection_parts.port
-      },
-      {
-        name  = "api.extraEnv[4].name"
-        value = "POSTGRES_DB"
-      },
-      {
-        name  = "api.extraEnv[4].value"
-        value = local.supabase_connection_parts.database
-      },
-      {
-        name  = "api.extraEnv[5].name"
-        value = "POSTGRES_API_SERVER_POOL_SIZE"
-      },
-      {
-        name  = "api.extraEnv[5].value"
-        value = "5"
-      },
-      {
-        name  = "api.extraEnv[6].name"
-        value = "POSTGRES_API_SERVER_POOL_OVERFLOW"
-      },
-      {
-        name  = "api.extraEnv[6].value"
-        value = "3"
-      },
-      {
-        name  = "api.extraEnv[7].name"
-        value = "ASYNCPG_STATEMENT_CACHE_SIZE"
-      },
-      {
-        name  = "api.extraEnv[7].value"
-        value = "0"
-      }
-    ]
-
-    content {
-      name  = set.value.name
-      value = set.value.value
-    }
-  }
+  type = "Opaque"
 
   depends_on = [kubernetes_namespace.namespaces]
 }

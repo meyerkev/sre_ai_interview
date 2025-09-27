@@ -56,9 +56,9 @@ module "vpc" {
   database_subnet_assign_ipv6_address_on_creation = true
 
   # Assign IPv6 CIDR blocks to subnets to enable DNS64
-  public_subnet_ipv6_prefixes   = [0, 1, 2]  # Use first 3 /64s for public subnets
-  private_subnet_ipv6_prefixes  = [4, 5, 6]  # Use next 3 /64s for private subnets
-  database_subnet_ipv6_prefixes = [8, 9, 10] # Use next 3 /64s for database subnets
+  public_subnet_ipv6_prefixes   = [for i in range(length(local.availability_zones)) : i]
+  private_subnet_ipv6_prefixes  = [for i in range(length(local.availability_zones)) : i + 4]
+  database_subnet_ipv6_prefixes = [for i in range(length(local.availability_zones)) : i + 8]
 
   # Enable NAT Gateway
   # Expensive, but a requirement 
@@ -67,6 +67,7 @@ module "vpc" {
   one_nat_gateway_per_az  = false
   enable_vpn_gateway      = false
   map_public_ip_on_launch = true
+  create_egress_only_igw  = true
 
   public_subnet_tags = {
     "kubernetes.io/role/elb" : 1
@@ -135,7 +136,7 @@ module "eks" {
   # Module v21 renamed inputs to align with upstream JSON; use `name`
   name               = var.cluster_name
   kubernetes_version = var.cluster_k8s_version
-  ip_family          = "ipv6"
+  ip_family          = "ipv4"
 
   endpoint_public_access                   = true
   enable_cluster_creator_admin_permissions = true
@@ -159,14 +160,15 @@ module "eks" {
       before_compute = true
       configuration_values = jsonencode({
         env = {
-          ENABLE_IPV6              = "true"
           ENABLE_PREFIX_DELEGATION = "true"
           WARM_PREFIX_TARGET       = "1"
+          WARM_ENI_TARGET          = "1"
         }
       })
     }
     aws-ebs-csi-driver = {
-      most_recent = true
+      most_recent              = true
+      service_account_role_arn = aws_iam_role.ebs_csi.arn
     }
   }
 
@@ -186,13 +188,14 @@ module "eks" {
 
   eks_managed_node_groups = {
     default_node_group = {
-      ami_type                   = contains(data.aws_ec2_instance_type.eks_node_instance_type.supported_architectures, "arm64") ? "AL2_ARM_64" : "AL2_x86_64"
+      ami_type                   = contains(data.aws_ec2_instance_type.eks_node_instance_type.supported_architectures, "arm64") ? "AL2023_ARM_64_STANDARD" : "AL2023_x86_64_STANDARD"
       instance_types             = [local.eks_node_instance_type]
       iam_role_attach_cni_policy = true
-
       # Use AWS defaults with existing optimizations
       create_launch_template     = false
       use_custom_launch_template = false
+
+      attach_csi_policy = true
 
       min_size     = var.min_nodes
       max_size     = var.max_nodes
@@ -211,7 +214,7 @@ module "eks" {
       }
 
       iam_role_additional_policies = {
-        AmazonEBSCSIDriverPolicy = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+        AmazonEBSCSIDriverPolicy = var.ebs_csi_driver_policy_arn
       }
 
     }
