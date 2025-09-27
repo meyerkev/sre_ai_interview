@@ -5,7 +5,8 @@ locals {
     "cluster-autoscaler" = "cluster-autoscaler"
     "metrics-server"     = "kube-system"
     "argocd"             = "argocd"
-    "onyx"               = "onyx"
+    "onyx"               = "terraform-onyx"
+    "argocd-onyx"        = "argocd-onyx"
   }
 
   service_accounts = {
@@ -225,6 +226,15 @@ resource "aws_security_group_rule" "alb_to_cluster_http" {
   type                     = "ingress"
   from_port                = 80
   to_port                  = 80
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb_public.id
+  security_group_id        = data.aws_eks_cluster.cluster.vpc_config[0].cluster_security_group_id
+}
+
+resource "aws_security_group_rule" "alb_to_cluster_https" {
+  type                     = "ingress"
+  from_port                = 443
+  to_port                  = 443
   protocol                 = "tcp"
   source_security_group_id = aws_security_group.alb_public.id
   security_group_id        = data.aws_eks_cluster.cluster.vpc_config[0].cluster_security_group_id
@@ -459,4 +469,38 @@ resource "helm_release" "argo-cd" {
   chart      = "argo-cd"
   namespace  = local.namespaces["argocd"]
   version    = "8.5.6"
+
+  wait             = true
+  create_namespace = false
+  timeout          = 600
+
+  values = [
+    yamlencode({
+      server = {
+        service = {
+          type = "LoadBalancer"
+          annotations = {
+            "service.beta.kubernetes.io/aws-load-balancer-type"                              = "nlb-ip"
+            "service.beta.kubernetes.io/aws-load-balancer-scheme"                            = "internet-facing"
+            "service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled" = "true"
+            "service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags"          = "Name=argocd-nlb"
+          }
+        }
+      }
+    })
+  ]
+
+  depends_on = [kubernetes_namespace.namespaces, helm_release.aws-load-balancer-controller]
+}
+
+# Apply the argo application
+resource "kubernetes_manifest" "argo_onyx_application" {
+  manifest = yamldecode(file("${path.module}/argo-onyx.yaml"))
+
+  field_manager {
+    name            = "terraform"
+    force_conflicts = true
+  }
+
+  depends_on = [helm_release.argo-cd]
 }

@@ -28,12 +28,6 @@ variable "github_repository" {
   default     = "meyerkev/onyx"
 }
 
-variable "github_oidc_subject" {
-  description = "GitHub OIDC subject (everything after 'repo:owner/repo:'), e.g. 'ref:refs/heads/main'."
-  type        = string
-  default     = "ref:refs/heads/main"
-}
-
 # GitHub runner variables
 
 variable "github_runner_enabled" {

@@ -26,12 +26,10 @@ while [[ $# -gt 0 ]]; do
       SUPABASE_CONNECTION_STRING="$2"; shift 2 ;;
     --github-repository)
       GITHUB_REPOSITORY="$2"; shift 2 ;;
-    --github-oidc-subject)
-      GITHUB_OIDC_SUBJECT="$2"; shift 2 ;;
     --)
       shift; INTERVIEW_NAME="$1"; shift ;;
     -h|--help)
-      echo "Usage: $0 [--upgrade] [--supabase-connection-string <postgres url>] [--github-repository owner/repo] [--github-oidc-subject subject] [--bootstrap-state-key <s3/key>] [-- <interview-name>]";
+      echo "Usage: $0 [--upgrade] [--supabase-connection-string <postgres url>] [--github-repository owner/repo] [--bootstrap-state-key <s3/key>] [-- <interview-name>]";
       echo "Environment variables:";
       echo "  GITHUB_PAT - GitHub Personal Access Token for runner registration";
       exit 0 ;;
@@ -86,7 +84,7 @@ if [ -n "$BOOTSTRAP_STATE_KEY" ]; then
 fi
 # terraform init $BOOTSTRAP_INIT_ARGS
 # Build terraform var args for bootstrap
-BOOTSTRAP_VAR_ARGS="-var interview_name=${INTERVIEW_NAME} -var github_repository=${GITHUB_REPOSITORY:-} -var github_oidc_subject=${GITHUB_OIDC_SUBJECT:-ref:refs/heads/main}"
+BOOTSTRAP_VAR_ARGS="-var interview_name=${INTERVIEW_NAME} -var github_repository=${GITHUB_REPOSITORY:-}"
 
 # Enable GitHub runner by default and add token if provided
 BOOTSTRAP_VAR_ARGS="$BOOTSTRAP_VAR_ARGS -var github_runner_enabled=true"
@@ -164,10 +162,22 @@ echo "⏳ Waiting for NLB to provision (up to 5 minutes)..."
 for i in {1..30}; do
   NLB_HOSTNAME=$(kubectl get svc onyx-nginx -n onyx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
   if [ -n "$NLB_HOSTNAME" ]; then
-    echo "✅ NLB provisioned: $NLB_HOSTNAME"
     break
   fi
   echo "⏳ NLB not ready yet, waiting... (attempt $i/30)"
+  sleep 10
+done
+
+# And now ArgoCD
+echo "Waiting for ArgoCD to provision (up to 5 minutes)..."
+
+# Wait for ArgoCD to be ready
+for i in {1..30}; do
+  ARGOCD_HOSTNAME=$(kubectl get svc argo-cd-argocd-server -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+  if [ -n "$ARGOCD_HOSTNAME" ]; then
+    break
+  fi
+  echo "⏳ ArgoCD not ready yet, waiting... (attempt $i/30)"
   sleep 10
 done
 
@@ -175,10 +185,20 @@ if [ -n "$NLB_HOSTNAME" ]; then
   echo ""
   echo "🎉 Onyx is ready!"
   echo "🌐 Web UI: http://$NLB_HOSTNAME"
-  echo "🔗 API: http://$NLB_HOSTNAME/api"
   echo ""
 else
   echo "⚠️  NLB not ready after 5 minutes. Check service status:"
   echo "   kubectl get svc onyx-nginx -n onyx"
-  echo "   kubectl describe svc onyx-nginx -n onyx"
+  echo "   kubectl describe svc onyx-nginx -n terraform-onyx"
+fi
+
+if [ -n "$ARGOCD_HOSTNAME" ]; then
+  echo ""
+  echo "🎉 ArgoCD is ready!"
+  echo "🌐 Web UI: http://$ARGOCD_HOSTNAME"
+  echo ""
+else
+  echo "⚠️  ArgoCD not ready after 5 minutes. Check service status:"
+  echo "   kubectl get svc argocd-server -n argocd"
+  echo "   kubectl describe svc argocd-server -n argocd"
 fi
