@@ -529,7 +529,7 @@ resource "kubernetes_manifest" "argo_onyx_application" {
       source = {
         repoURL        = "https://github.com/meyerkev/onyx.git"
         targetRevision = "working_i_hope"
-        path           = "helm/onyx/charts/onyx"
+        path           = "deployment/helm/charts/onyx"
         helm = {
           values = local.onyx_helm_values
         }
