@@ -136,7 +136,7 @@ module "eks" {
   # Module v21 renamed inputs to align with upstream JSON; use `name`
   name               = var.cluster_name
   kubernetes_version = var.cluster_k8s_version
-  ip_family          = "ipv4"
+  ip_family          = "ipv6"
 
   endpoint_public_access                   = true
   enable_cluster_creator_admin_permissions = true
@@ -160,6 +160,7 @@ module "eks" {
       before_compute = true
       configuration_values = jsonencode({
         env = {
+          ENABLE_IPV6              = "true"
           ENABLE_PREFIX_DELEGATION = "true"
           WARM_PREFIX_TARGET       = "1"
           WARM_ENI_TARGET          = "1"
