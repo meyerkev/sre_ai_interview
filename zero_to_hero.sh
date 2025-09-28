@@ -135,7 +135,7 @@ echo "✨ EKS cluster initialized successfully!"
 # update kubeconfig
 $(terraform output -raw kubeconfig_command)
 # Set the default namespsace to onyx
-kubectl config set-context --current --namespace=onyx
+kubectl config set-context --current --namespace=terraform-onyx
 
 # And install helm
 cd ../aws-helm
