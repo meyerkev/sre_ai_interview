@@ -160,7 +160,6 @@ module "eks" {
       before_compute = true
       configuration_values = jsonencode({
         env = {
-          ENABLE_IPV6              = "true"
           ENABLE_PREFIX_DELEGATION = "true"
           WARM_PREFIX_TARGET       = "1"
           WARM_ENI_TARGET          = "1"
