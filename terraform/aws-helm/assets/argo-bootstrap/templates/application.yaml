@@ -1,0 +1,4 @@
+{{- if and .Values.application.enabled .Values.application.manifest }}
+{{- toYaml .Values.application.manifest }}
+{{- end }}
+

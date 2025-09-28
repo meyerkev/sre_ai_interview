@@ -1,0 +1,4 @@
+application:
+  enabled: true
+  manifest: {}
+

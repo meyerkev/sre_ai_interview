@@ -48,7 +48,37 @@ locals {
     database = nonsensitive(regex("postgresql://(?P<user>[^:]+):(?P<password>[^@]+)@(?P<host>[^:]+):(?P<port>[0-9]+)/(?P<database>.+)", local.supabase_connection_string).database)
   }
 
-  onyx_helm_values = yamlencode({
+  argocd_application_manifest = {
+    apiVersion = "argoproj.io/v1alpha1"
+    kind       = "Application"
+    metadata = {
+      name      = "onyx"
+      namespace = local.namespaces["argocd"]
+    }
+    spec = {
+      project = "default"
+      source = {
+        repoURL        = "https://github.com/meyerkev/onyx.git"
+        targetRevision = "working_i_hope"
+        path           = "deployment/helm/charts/onyx"
+        helm = {
+          values = yamlencode(local.onyx_helm_values_map)
+        }
+      }
+      destination = {
+        server    = "https://kubernetes.default.svc"
+        namespace = local.namespaces["argocd-onyx"]
+      }
+      syncPolicy = {
+        automated = {
+          prune    = true
+          selfHeal = true
+        }
+      }
+    }
+  }
+
+  onyx_helm_values_map = {
     nginx = {
       service = {
         type = "LoadBalancer"
@@ -57,6 +87,7 @@ locals {
           "service.beta.kubernetes.io/aws-load-balancer-scheme"                            = "internet-facing"
           "service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags"          = "Name=onyx-nlb"
           "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type"                   = "ip"
+          "service.beta.kubernetes.io/aws-load-balancer-ip-address-type"                   = "dualstack"
           "service.beta.kubernetes.io/aws-load-balancer-backend-protocol"                  = "HTTP"
           "service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol"              = "HTTP"
           "service.beta.kubernetes.io/aws-load-balancer-healthcheck-path"                  = "/"
@@ -183,7 +214,9 @@ locals {
         pullPolicy = "Always"
       }
     }
-  })
+  }
+
+  onyx_helm_values = yamlencode(local.onyx_helm_values_map)
 }
 
 resource "kubernetes_namespace" "namespaces" {
@@ -431,43 +464,6 @@ resource "helm_release" "metrics-server" {
 
 }
 
-resource "null_resource" "onyx_dependencies" {
-  provisioner "local-exec" {
-    command     = <<-EOT
-      set -euo pipefail
-      helm dependency update ../../helm/onyx/charts/onyx
-    EOT
-    working_dir = path.module
-  }
-
-  triggers = {
-    always_run = timestamp()
-  }
-}
-
-resource "helm_release" "onyx" {
-  name          = "onyx"
-  recreate_pods = true
-  chart         = "${path.module}/../../helm/onyx/charts/onyx"
-  namespace     = local.namespaces["onyx"]
-
-  wait             = true
-  create_namespace = false
-  timeout          = 300
-  skip_crds        = false
-
-  values = [local.onyx_helm_values]
-
-  lifecycle {
-    precondition {
-      condition     = length(fileset("${path.module}/../../helm/onyx/charts/onyx/charts", "*.tgz")) == 5
-      error_message = "There are not 5 files in the charts directory"
-    }
-  }
-
-  depends_on = [kubernetes_namespace.namespaces, null_resource.onyx_dependencies, kubernetes_secret.supabase_postgres, helm_release.aws-load-balancer-controller]
-}
-
 # Create Kubernetes secret for Supabase database credentials
 resource "kubernetes_secret" "supabase_postgres" {
   metadata {
@@ -515,42 +511,26 @@ resource "helm_release" "argo-cd" {
   depends_on = [kubernetes_namespace.namespaces, helm_release.aws-load-balancer-controller]
 }
 
-# Apply the argo application
-resource "kubernetes_manifest" "argo_onyx_application" {
-  manifest = {
-    apiVersion = "argoproj.io/v1alpha1"
-    kind       = "Application"
-    metadata = {
-      name      = "onyx"
-      namespace = local.namespaces["argocd"]
-    }
-    spec = {
-      project = "default"
-      source = {
-        repoURL        = "https://github.com/meyerkev/onyx.git"
-        targetRevision = "working_i_hope"
-        path           = "deployment/helm/charts/onyx"
-        helm = {
-          values = local.onyx_helm_values
-        }
-      }
-      destination = {
-        server    = "https://kubernetes.default.svc"
-        namespace = local.namespaces["argocd-onyx"]
-      }
-      syncPolicy = {
-        automated = {
-          prune    = true
-          selfHeal = true
-        }
-      }
-    }
-  }
 
-  field_manager {
-    name            = "terraform"
-    force_conflicts = true
-  }
+
+# Bootstrap Argo CD application after Argo installation
+resource "helm_release" "argo_bootstrap" {
+  name      = "onyx-argocd-bootstrap"
+  chart     = "${path.module}/assets/argo-bootstrap"
+  namespace = local.namespaces["argocd"]
+  version   = "0.1.0"
+
+  wait             = true
+  create_namespace = false
+
+  values = [
+    yamlencode({
+      application = {
+        enabled  = true
+        manifest = local.argocd_application_manifest
+      }
+    })
+  ]
 
   depends_on = [helm_release.argo-cd]
 }
