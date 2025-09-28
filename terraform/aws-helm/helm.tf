@@ -538,6 +538,12 @@ resource "kubernetes_manifest" "argo_onyx_application" {
         server    = "https://kubernetes.default.svc"
         namespace = local.namespaces["argocd-onyx"]
       }
+      syncPolicy = {
+        automated = {
+          prune    = true
+          selfHeal = true
+        }
+      }
     }
   }
 
