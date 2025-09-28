@@ -188,7 +188,7 @@ if [ -n "$NLB_HOSTNAME" ]; then
   echo ""
 else
   echo "⚠️  NLB not ready after 5 minutes. Check service status:"
-  echo "   kubectl get svc onyx-nginx -n onyx"
+  echo "   kubectl get svc onyx-nginx -n terraform-onyx"
   echo "   kubectl describe svc onyx-nginx -n terraform-onyx"
 fi
 

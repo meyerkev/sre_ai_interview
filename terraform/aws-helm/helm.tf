@@ -47,6 +47,143 @@ locals {
     port     = nonsensitive(regex("postgresql://(?P<user>[^:]+):(?P<password>[^@]+)@(?P<host>[^:]+):(?P<port>[0-9]+)/(?P<database>.+)", local.supabase_connection_string).port)
     database = nonsensitive(regex("postgresql://(?P<user>[^:]+):(?P<password>[^@]+)@(?P<host>[^:]+):(?P<port>[0-9]+)/(?P<database>.+)", local.supabase_connection_string).database)
   }
+
+  onyx_helm_values = yamlencode({
+    nginx = {
+      service = {
+        type = "LoadBalancer"
+        annotations = {
+          "service.beta.kubernetes.io/aws-load-balancer-type"                              = "nlb-ip"
+          "service.beta.kubernetes.io/aws-load-balancer-scheme"                            = "internet-facing"
+          "service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags"          = "Name=onyx-nlb"
+          "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type"                   = "ip"
+          "service.beta.kubernetes.io/aws-load-balancer-backend-protocol"                  = "HTTP"
+          "service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol"              = "HTTP"
+          "service.beta.kubernetes.io/aws-load-balancer-healthcheck-path"                  = "/"
+          "service.beta.kubernetes.io/aws-load-balancer-healthcheck-port"                  = "traffic-port"
+          "service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled" = "true"
+        }
+      }
+      extraEnvVars = [
+        {
+          name  = "DOMAIN"
+          value = "localhost"
+        },
+        {
+          name  = "LISTEN_ADDRESS"
+          value = "::"
+        }
+      ]
+      ingress = {
+        enabled = false
+      }
+    }
+    minio = {
+      resourcesPreset = "none"
+      console = {
+        enabled = false
+      }
+    }
+    postgresql = {
+      enabled = false
+    }
+
+    externalDatabase = {
+      host                      = local.supabase_connection_parts.host
+      port                      = tonumber(local.supabase_connection_parts.port)
+      user                      = local.supabase_connection_parts.user
+      password                  = local.supabase_connection_parts.password
+      database                  = local.supabase_connection_parts.database
+      existingSecret            = "onyx-supabase-secret"
+      existingSecretPasswordKey = "postgres_password"
+    }
+
+    configMap = {
+      POSTGRES_API_SERVER_POOL_SIZE     = "15"
+      POSTGRES_API_SERVER_POOL_OVERFLOW = "10"
+      POSTGRES_CONNECT_TIMEOUT          = "60"
+      POSTGRES_POOL_TIMEOUT             = "60"
+      ASYNCPG_STATEMENT_CACHE_SIZE      = "0"
+      POSTGRES_HOST                     = local.supabase_connection_parts.host
+      POSTGRES_PORT                     = local.supabase_connection_parts.port
+      POSTGRES_DB                       = local.supabase_connection_parts.database
+    }
+
+    api = {
+      replicaCount = 1
+      image = {
+        repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend"
+        tag        = "main"
+        pullPolicy = "Always"
+      }
+      extraEnv = [
+        {
+          name  = "POSTGRES_USER"
+          value = local.supabase_connection_parts.user
+        },
+        {
+          name = "POSTGRES_PASSWORD"
+          valueFrom = {
+            secretKeyRef = {
+              name = "onyx-supabase-secret"
+              key  = "postgres_password"
+            }
+          }
+        }
+      ]
+    }
+
+    inferenceCapability = {
+      image = {
+        repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server"
+        tag        = "main"
+        pullPolicy = "Always"
+      }
+      containerPorts = {
+        server = 9000
+      }
+    }
+
+    indexCapability = {
+      image = {
+        repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server"
+        tag        = "main"
+        pullPolicy = "Always"
+      }
+    }
+
+    webserver = {
+      image = {
+        repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-web"
+        tag        = "main"
+        pullPolicy = "Always"
+      }
+    }
+
+    celery_shared = {
+      image = {
+        repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend"
+        tag        = "main"
+        pullPolicy = "Always"
+      }
+    }
+
+    slackbot = {
+      image = {
+        repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend"
+        tag        = "main"
+        pullPolicy = "Always"
+      }
+    }
+
+    model_server = {
+      image = {
+        repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server"
+        tag        = "main"
+        pullPolicy = "Always"
+      }
+    }
+  })
 }
 
 resource "kubernetes_namespace" "namespaces" {
@@ -294,40 +431,17 @@ resource "helm_release" "metrics-server" {
 
 }
 
-# # Create a Kubernetes Service for the dual-stack proxy (if enabled)
-# resource "helm_release" "argocd" {
-#   name       = "argocd"
-#   repository = "https://argoproj.github.io/argo-helm"
-#   chart      = "argo-cd"
-#   namespace  = local.namespaces["argocd"]
-#   version    = "5.46.8"
-
-#   wait             = true
-#   create_namespace = true
-#   timeout          = 600
-
-#   values = [
-#     yamlencode({
-#       server = {
-#         service = {
-#           type = "LoadBalancer"
-#         }
-#         insecure = true
-#       }
-#     })
-#   ]
-
-#   depends_on = [kubernetes_namespace.namespaces, data.kubernetes_service.aws_load_balancer_webhook]
-# }
-
 resource "null_resource" "onyx_dependencies" {
   provisioner "local-exec" {
-    command     = "helm dependency update ../../helm/onyx/charts/onyx"
+    command     = <<-EOT
+      set -euo pipefail
+      helm dependency update ../../helm/onyx/charts/onyx
+    EOT
     working_dir = path.module
   }
 
   triggers = {
-    chart_hash = filesha256("${path.module}/../../helm/onyx/charts/onyx/Chart.yaml")
+    always_run = timestamp()
   }
 }
 
@@ -342,106 +456,14 @@ resource "helm_release" "onyx" {
   timeout          = 300
   skip_crds        = false
 
-  values = [<<EOF
-nginx:
-  service:
-    type: LoadBalancer
-    annotations:
-      service.beta.kubernetes.io/aws-load-balancer-type: "nlb-ip"
-      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
-      service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "Name=onyx-nlb"
-      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
-      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: HTTP
-      service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: HTTP
-      service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/"
-      service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "traffic-port"
-      service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
-  extraEnvVars:
-    - name: DOMAIN
-      value: localhost
-    - name: LISTEN_ADDRESS
-      value: "::"
-  ingress:
-    enabled: false
-minio:
-  resourcesPreset: "none"
-  console:
-    enabled: false
+  values = [local.onyx_helm_values]
 
-configMap:
-  POSTGRES_API_SERVER_POOL_SIZE: "15"
-  POSTGRES_API_SERVER_POOL_OVERFLOW: "10"
-  POSTGRES_CONNECT_TIMEOUT: "60"
-  POSTGRES_POOL_TIMEOUT: "60"
-  ASYNCPG_STATEMENT_CACHE_SIZE: "0"
-
-api:
-  replicaCount: 1
-  image:
-    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend
-    tag: "main"
-    pullPolicy: "Always"
-  extraEnv:
-    - name: POSTGRES_USER
-      value: ${local.supabase_connection_parts.user}
-    - name: POSTGRES_PASSWORD
-      valueFrom:
-        secretKeyRef:
-          name: onyx-supabase-secret
-          key: postgres_password
-    - name: POSTGRES_HOST
-      value: ${local.supabase_connection_parts.host}
-    - name: POSTGRES_PORT
-      value: ${local.supabase_connection_parts.port}
-    - name: POSTGRES_DB
-      value: ${local.supabase_connection_parts.database}
-    - name: POSTGRES_API_SERVER_POOL_SIZE
-      value: "15"
-    - name: POSTGRES_API_SERVER_POOL_OVERFLOW
-      value: "10"
-    - name: ASYNCPG_STATEMENT_CACHE_SIZE
-      value: "0"
-
-inferenceCapability:
-  image:
-    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server
-    tag: "main"
-    pullPolicy: "Always"
-  containerPorts:
-    server: 9000
-
-indexCapability:
-  image:
-    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server
-    tag: "main"
-    pullPolicy: "Always"
-
-webserver:
-  image:
-    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-web
-    tag: "main"
-    pullPolicy: "Always"
-
-celery_shared:
-  image:
-    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend
-    tag: "main"
-    pullPolicy: "Always"
-
-slackbot:
-  image:
-    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend
-    tag: "main"
-    pullPolicy: "Always"
-
-model_server:
-  image:
-    repository: 386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server
-    tag: "main"
-    pullPolicy: "Always"
-
-EOF
-  ]
+  lifecycle {
+    precondition {
+      condition     = length(fileset("${path.module}/../../helm/onyx/charts/onyx/charts", "*.tgz")) == 5
+      error_message = "There are not 5 files in the charts directory"
+    }
+  }
 
   depends_on = [kubernetes_namespace.namespaces, null_resource.onyx_dependencies, kubernetes_secret.supabase_postgres, helm_release.aws-load-balancer-controller]
 }
@@ -495,7 +517,29 @@ resource "helm_release" "argo-cd" {
 
 # Apply the argo application
 resource "kubernetes_manifest" "argo_onyx_application" {
-  manifest = yamldecode(file("${path.module}/argo-onyx.yaml"))
+  manifest = {
+    apiVersion = "argoproj.io/v1alpha1"
+    kind       = "Application"
+    metadata = {
+      name      = "onyx"
+      namespace = local.namespaces["argocd"]
+    }
+    spec = {
+      project = "default"
+      source = {
+        repoURL        = "https://github.com/meyerkev/onyx.git"
+        targetRevision = "working_i_hope"
+        path           = "helm/onyx/charts/onyx"
+        helm = {
+          values = local.onyx_helm_values
+        }
+      }
+      destination = {
+        server    = "https://kubernetes.default.svc"
+        namespace = local.namespaces["argocd-onyx"]
+      }
+    }
+  }
 
   field_manager {
     name            = "terraform"
