@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+cd $(dirname $0)
+
 echo "🔧 Fixing GitHub runner registration..."
 
 # Get registration token from GitHub API
@@ -24,7 +26,7 @@ echo "🔄 Updating GitHub runner with registration token..."
 cd /Users/meyerkev/development/onyx-interview/terraform/bootstrap
 
 terraform apply \
-  -var="interview_name=sre-ai-interview" \
+  -var="interview_name=sre-ai-interview-ipv4" \
   -var="github_repository=meyerkev/onyx" \
   -var="github_runner_enabled=true" \
   -var="github_runner_token=${REGISTRATION_TOKEN}" \

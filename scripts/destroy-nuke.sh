@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd $(dirname $0)
+cd ../
+
 # Safe wrapper to run aws-nuke with the repo's aws-nuke.yaml
 # Defaults to DRY RUN. Pass --yes to actually delete (adds --no-dry-run --force).
 

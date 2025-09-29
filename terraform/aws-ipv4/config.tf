@@ -2,7 +2,7 @@ terraform {
   required_version = "~> 1.13.3"
   backend "s3" {
     bucket = "meyerkev-terraform-state"
-    key    = "test-interview.tfstate"
+    key    = "aws-ipv4/test-interview.tfstate"
     region = "us-east-2"
   }
 

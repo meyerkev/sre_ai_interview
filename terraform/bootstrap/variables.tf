@@ -7,7 +7,7 @@ variable "region" {
 variable "interview_name" {
   description = "Identifier for this interview; used for ECR repo name and tags (e.g., 'interview-repo', 'acme-takehome')."
   type        = string
-  default     = "sre-ai-interview"
+  default     = "sre-ai-interview-ipv4"
 }
 
 variable "repository_prefix" {

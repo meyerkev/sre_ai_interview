@@ -8,7 +8,7 @@ cd $(dirname $0)
 echo "🚀 Starting zero to hero deployment..."
 
 # Optional: choose interview/ECR repo name and bootstrap backend key
-INTERVIEW_NAME="sre-ai-interview"
+INTERVIEW_NAME="sre-ai-interview-ipv4"
 GITHUB_REPOSITORY="meyerkev/onyx"
 
 BOOTSTRAP_STATE_KEY="${INTERVIEW_NAME}-bootstrap-ecr.tfstate"
@@ -121,7 +121,7 @@ echo "✨ Bootstrap Infrastructure created successfully!"
 
 # Initialize the EKS cluster
 echo "📦 Initializing EKS cluster..."
-cd ../aws
+cd ../aws-ipv4
 # Init with the bucket we just created, but the standard key from that module
 # terraform init $TERRAFORM_INIT_ARGS
 terraform apply -var "interviewee_name=${INTERVIEW_NAME}" -auto-approve
@@ -138,8 +138,8 @@ $(terraform output -raw kubeconfig_command)
 kubectl config set-context --current --namespace=argocd-onyx
 
 # And install helm
-cd ../aws-helm
-#$ terraform init $TERRAFORM_INIT_ARGS
+cd ../aws-helm-ipv4
+terraform init $TERRAFORM_INIT_ARGS -migrate-state
 
 HELM_VAR_ARGS="-var eks_cluster_name=${CLUSTER_NAME} -var aws_region=${AWS_REGION}"
 if [ -n "${ROUTE53_ZONE_ID:-}" ]; then
@@ -160,7 +160,7 @@ echo "⏳ Waiting for NLB to provision (up to 5 minutes)..."
 
 # Wait for NLB to be ready
 for i in {1..30}; do
-  NLB_HOSTNAME=$(kubectl get svc onyx-nginx -n onyx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+  NLB_HOSTNAME=$(kubectl get svc onyx-nginx -n argocd-onyx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
   if [ -n "$NLB_HOSTNAME" ]; then
     break
   fi
@@ -188,8 +188,8 @@ if [ -n "$NLB_HOSTNAME" ]; then
   echo ""
 else
   echo "⚠️  NLB not ready after 5 minutes. Check service status:"
-  echo "   kubectl get svc onyx-nginx -n terraform-onyx"
-  echo "   kubectl describe svc onyx-nginx -n terraform-onyx"
+  echo "   kubectl get svc onyx-nginx -n argocd-onyx"
+  echo "   kubectl describe svc onyx-nginx -n argocd-onyx"
 fi
 
 if [ -n "$ARGOCD_HOSTNAME" ]; then

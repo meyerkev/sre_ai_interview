@@ -48,6 +48,11 @@ locals {
     database = nonsensitive(regex("postgresql://(?P<user>[^:]+):(?P<password>[^@]+)@(?P<host>[^:]+):(?P<port>[0-9]+)/(?P<database>.+)", local.supabase_connection_string).database)
   }
 
+  pgbouncer_service_name      = "pgbouncer"
+  pgbouncer_service_namespace = local.namespaces["onyx"]
+  pgbouncer_service_port      = 5432
+  pgbouncer_service_fqdn      = "${local.pgbouncer_service_name}.${local.pgbouncer_service_namespace}.svc.cluster.local"
+
   argocd_application_manifest = {
     apiVersion = "argoproj.io/v1alpha1"
     kind       = "Application"
@@ -115,13 +120,13 @@ locals {
         enabled = false
       }
     }
-    postgresql = {
-      enabled = false
-    }
+    # postgresql = {
+    #   enabled = false
+    # }
 
     externalDatabase = {
-      host                      = local.supabase_connection_parts.host
-      port                      = tonumber(local.supabase_connection_parts.port)
+      host                      = local.pgbouncer_service_fqdn
+      port                      = local.pgbouncer_service_port
       user                      = local.supabase_connection_parts.user
       password                  = local.supabase_connection_parts.password
       database                  = local.supabase_connection_parts.database
@@ -135,16 +140,16 @@ locals {
       POSTGRES_CONNECT_TIMEOUT          = "60"
       POSTGRES_POOL_TIMEOUT             = "60"
       ASYNCPG_STATEMENT_CACHE_SIZE      = "0"
-      POSTGRES_HOST                     = local.supabase_connection_parts.host
-      POSTGRES_PORT                     = local.supabase_connection_parts.port
-      POSTGRES_DB                       = local.supabase_connection_parts.database
+      # POSTGRES_HOST                     = local.pgbouncer_service_fqdn
+      # POSTGRES_PORT                     = local.pgbouncer_service_port
+      # POSTGRES_DB                       = local.supabase_connection_parts.database
     }
 
     api = {
       replicaCount = 1
       image = {
         repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend"
-        tag        = "main"
+        tag        = "working_i_hope"
         pullPolicy = "Always"
       }
       extraEnv = [
@@ -194,7 +199,7 @@ locals {
     celery_shared = {
       image = {
         repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend"
-        tag        = "main"
+        tag        = "working_i_hope"
         pullPolicy = "Always"
       }
     }
@@ -202,7 +207,7 @@ locals {
     slackbot = {
       image = {
         repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-backend"
-        tag        = "main"
+        tag        = "working_i_hope"
         pullPolicy = "Always"
       }
     }
@@ -210,9 +215,13 @@ locals {
     model_server = {
       image = {
         repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server"
-        tag        = "main"
+        tag        = "working_i_hope"
         pullPolicy = "Always"
       }
+    }
+
+    autoscaling = {
+      engine = "hpa"
     }
   }
 
@@ -263,11 +272,12 @@ module "aws-load-balancer-irsa" {
 }
 
 resource "helm_release" "aws-load-balancer-controller" {
-  name       = "aws-load-balancer-controller"
-  repository = "https://aws.github.io/eks-charts"
-  chart      = "aws-load-balancer-controller"
-  namespace  = local.namespaces["aws-load-balancer-controller"]
-  version    = "1.5.3"
+  name         = "aws-load-balancer-controller"
+  repository   = "https://aws.github.io/eks-charts"
+  chart        = "aws-load-balancer-controller"
+  namespace    = local.namespaces["aws-load-balancer-controller"]
+  version      = "1.13.4"
+  force_update = true
 
   wait = true
 
@@ -468,7 +478,7 @@ resource "helm_release" "metrics-server" {
 resource "kubernetes_secret" "supabase_postgres" {
   metadata {
     name      = "onyx-supabase-secret"
-    namespace = local.namespaces["onyx"]
+    namespace = local.namespaces["argocd-onyx"]
   }
 
   data = {
@@ -480,40 +490,64 @@ resource "kubernetes_secret" "supabase_postgres" {
   depends_on = [kubernetes_namespace.namespaces]
 }
 
-# argo
-resource "helm_release" "argo-cd" {
-  name       = "argo-cd"
-  repository = "https://argoproj.github.io/argo-helm"
-  chart      = "argo-cd"
-  namespace  = local.namespaces["argocd"]
-  version    = "8.5.6"
+resource "null_resource" "aws_lb_controller_delay" {
+  provisioner "local-exec" {
+    command = "sleep 1"
+  }
 
+  triggers = {
+    always_run = timestamp()
+  }
+
+  depends_on = [helm_release.aws-load-balancer-controller]
+}
+
+resource "helm_release" "argo-cd" {
+  name             = "argo-cd"
+  repository       = "https://argoproj.github.io/argo-helm"
+  chart            = "argo-cd"
+  namespace        = local.namespaces["argocd"]
+  version          = "8.5.6"
   wait             = true
   create_namespace = false
+  force_update     = true
   timeout          = 600
-
   values = [
     yamlencode({
+      # The Argo UI needs to be reachable from outside the cluster.
+      # In an IPv6-only EKS cluster an AWS Network Load Balancer will never
+      # become ready (NLB target groups only support IPv4 at the moment).
+      # Instead we keep the service internal and expose it through the AWS
+      # Load Balancer Controller as an Application Load Balancer (ALB).
       server = {
         service = {
           type = "LoadBalancer"
           annotations = {
-            "service.beta.kubernetes.io/aws-load-balancer-type"                              = "nlb-ip"
+            "service.beta.kubernetes.io/aws-load-balancer-type"                              = "nlb"
             "service.beta.kubernetes.io/aws-load-balancer-scheme"                            = "internet-facing"
+            "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type"                   = "ip"
             "service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled" = "true"
-            "service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags"          = "Name=argocd-nlb"
           }
+          ports = {
+            http  = 80
+            https = 443
+          }
+        }
+        ingress = {
+          enabled = false
         }
       }
     })
   ]
-
-  depends_on = [kubernetes_namespace.namespaces, helm_release.aws-load-balancer-controller]
+  depends_on = [kubernetes_namespace.namespaces, null_resource.aws_lb_controller_delay]
 }
 
+# So these are our two helm installs
+# Disable one, run helm apply, then run the other. 
 
-
-# Bootstrap Argo CD application after Argo installation
+# # So this is a little bit of a hack, but it's the only way I can get the Argo CD application to be created after the Argo CD installation.
+# # Because otherwise the plan is missing the CRD. 
+# # Bootstrap Argo CD application after Argo installation
 resource "helm_release" "argo_bootstrap" {
   name      = "onyx-argocd-bootstrap"
   chart     = "${path.module}/assets/argo-bootstrap"
@@ -533,4 +567,21 @@ resource "helm_release" "argo_bootstrap" {
   ]
 
   depends_on = [helm_release.argo-cd]
+
 }
+
+# resource "helm_release" "onyx" {
+#   name      = "onyx"
+#   chart     = "/Users/meyerkev/development/onyx/deployment/helm/charts/onyx"
+#   namespace = local.namespaces["argocd-onyx"]
+#   version   = "0.1.0"
+
+#   # Same as the Argo CD application manifest
+#   values = [
+#     yamlencode(local.onyx_helm_values_map)
+#   ]
+
+#   wait             = true
+#   create_namespace = false
+
+# }

@@ -5,7 +5,7 @@ variable "region" {
 
 variable "cluster_name" {
   type    = string
-  default = "sre-ai-interview-eks-cluster"
+  default = "sre-ai-interview-eks-ipv4"
 }
 
 variable "vpc_name" {
@@ -15,12 +15,12 @@ variable "vpc_name" {
 
 variable "vpc_cidr" {
   type    = string
-  default = "10.0.0.0/16"
+  default = "10.1.0.0/16"
 }
 
 variable "interviewee_name" {
   type    = string
-  default = "sre-ai-interview"
+  default = "sre-ai-interview-ipv4"
 }
 
 variable "cluster_k8s_version" {

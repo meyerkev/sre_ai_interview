@@ -43,19 +43,17 @@ module "vpc" {
   azs = local.availability_zones
 
   enable_dns_hostnames = true
-  enable_ipv6          = true # Enable IPv6 across the VPC for EKS
+  enable_ipv6          = true
 
   # TODO: Some regions have more than 4 AZ's
   public_subnets   = [for i, az in local.availability_zones : cidrsubnet(var.vpc_cidr, 8, i)]
   private_subnets  = [for i, az in local.availability_zones : cidrsubnet(var.vpc_cidr, 8, i + 4)]
   database_subnets = [for i, az in local.availability_zones : cidrsubnet(var.vpc_cidr, 8, i + 8)]
 
-  # Make subnets dual-stack and ensure resources launched into them receive IPv6 addresses
   public_subnet_assign_ipv6_address_on_creation   = true
   private_subnet_assign_ipv6_address_on_creation  = true
   database_subnet_assign_ipv6_address_on_creation = true
 
-  # Assign IPv6 CIDR blocks to subnets to enable DNS64
   public_subnet_ipv6_prefixes   = [for i in range(length(local.availability_zones)) : i]
   private_subnet_ipv6_prefixes  = [for i in range(length(local.availability_zones)) : i + 4]
   database_subnet_ipv6_prefixes = [for i in range(length(local.availability_zones)) : i + 8]
@@ -136,14 +134,14 @@ module "eks" {
   # Module v21 renamed inputs to align with upstream JSON; use `name`
   name               = var.cluster_name
   kubernetes_version = var.cluster_k8s_version
-  ip_family          = "ipv6"
+  ip_family          = "ipv4"
 
   endpoint_public_access                   = true
   enable_cluster_creator_admin_permissions = true
 
   create_auto_mode_iam_resources = false
   compute_config                 = {}
-  create_cni_ipv6_iam_policy     = true
+  create_cni_ipv6_iam_policy     = false
 
   addons = {
     coredns = {
@@ -240,8 +238,7 @@ resource "aws_security_group" "remote_access" {
     to_port     = 65535
     protocol    = "tcp"
     # TODO: This is also bad and I would never do this in production
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   ingress {
@@ -250,16 +247,14 @@ resource "aws_security_group" "remote_access" {
     to_port     = 22
     protocol    = "tcp"
     # TODO: This is also bad and I would never do this in production
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
-    from_port        = 0
-    to_port          = 0
-    protocol         = "-1"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   tags = { Name = "eks-remote" }

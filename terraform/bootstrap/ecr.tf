@@ -56,7 +56,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 resource "aws_iam_role" "github_ci" {
   count = var.github_repository != null ? 1 : 0
 
-  name = "${var.interview_name}-github-ci"
+  name = "sre-ai-interview-github-ci"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -71,7 +71,11 @@ resource "aws_iam_role" "github_ci" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:ref:refs/heads/*"
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:${var.github_repository}:ref:refs/heads/*",
+              "repo:${var.github_repository}:ref:refs/tags/*",
+              "repo:${var.github_repository}:pull_request"
+            ]
           }
         }
       }

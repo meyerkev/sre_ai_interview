@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
+cd $(dirname $0)
+cd ../
 # This script destroys only the terraform/aws infrastructure
 
 # Parse command line arguments
@@ -32,7 +34,7 @@ set -u
 
 # Destroy the EKS cluster
 echo "🗑️ Destroying EKS cluster..."
-cd terraform/aws
+cd terraform/aws-ipv4
 terraform init $TERRAFORM_INIT_ARGS
 
 echo "🧹 Cleaning up Kubernetes-managed resources from state..."

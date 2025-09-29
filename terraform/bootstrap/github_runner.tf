@@ -39,7 +39,7 @@ resource "aws_security_group" "github_runner" {
 resource "aws_iam_role" "github_runner" {
   count = local.github_runner_enabled ? 1 : 0
 
-  name = "${var.interview_name}-github-runner-role"
+  name = "${var.interview_name}-ipv4-github-runner-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -108,7 +108,8 @@ locals {
     github_repository = var.github_repository
     github_token      = var.github_runner_token
     runner_name       = "${var.interview_name}-runner"
-    runner_labels     = "self-hosted,linux,x64,${var.interview_name}"
+    # Hardcode the interview name to sre-ai-interview because the other repo sets that tag in source
+    runner_labels = "self-hosted,linux,x64,sre-ai-interview"
   })) : ""
 }
 
@@ -119,7 +120,7 @@ resource "aws_launch_template" "github_runner" {
   name_prefix   = "${var.interview_name}-github-runner-"
   image_id      = data.aws_ami.ubuntu[0].id
   instance_type = var.github_runner_instance_type
-  key_name      = "gitlab"
+  key_name      = "github"
 
   vpc_security_group_ids = [aws_security_group.github_runner[0].id]
 

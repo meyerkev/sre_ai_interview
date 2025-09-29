@@ -5,7 +5,7 @@ terraform {
   required_version = "~> 1.13.3"
   backend "s3" {
     bucket = "meyerkev-terraform-state"
-    key    = "aws-helm/test-interview-helm.tfstate"
+    key    = "aws-helm/test-interview-helm-ipv4.tfstate"
     region = "us-east-2"
   }
 
