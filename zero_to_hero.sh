@@ -3,8 +3,6 @@ set -eo pipefail
 
 cd $(dirname $0)
 
-
-
 echo "🚀 Starting zero to hero deployment..."
 
 # Optional: choose interview/ECR repo name and bootstrap backend key
@@ -26,6 +24,8 @@ while [[ $# -gt 0 ]]; do
       SUPABASE_CONNECTION_STRING="$2"; shift 2 ;;
     --github-repository)
       GITHUB_REPOSITORY="$2"; shift 2 ;;
+    --github-pat)
+      GITHUB_PAT="$2"; shift 2 ;;
     --)
       shift; INTERVIEW_NAME="$1"; shift ;;
     -h|--help)

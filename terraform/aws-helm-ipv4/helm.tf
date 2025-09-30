@@ -172,7 +172,7 @@ locals {
     inferenceCapability = {
       image = {
         repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server"
-        tag        = "main"
+        tag        = "working_i_hope"
         pullPolicy = "Always"
       }
       containerPorts = {
@@ -183,7 +183,7 @@ locals {
     indexCapability = {
       image = {
         repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-model-server"
-        tag        = "main"
+        tag        = "working_i_hope"
         pullPolicy = "Always"
       }
     }
@@ -191,7 +191,7 @@ locals {
     webserver = {
       image = {
         repository = "386145735201.dkr.ecr.us-east-2.amazonaws.com/onyx-web"
-        tag        = "main"
+        tag        = "working_i_hope"
         pullPolicy = "Always"
       }
     }
@@ -570,9 +570,10 @@ resource "helm_release" "argo_bootstrap" {
 
 }
 
+# Useful for debugging
 # resource "helm_release" "onyx" {
 #   name      = "onyx"
-#   chart     = "/Users/meyerkev/development/onyx/deployment/helm/charts/onyx"
+#   chart     = "${onyx_chart_path}/deployment/helm/charts/onyx"
 #   namespace = local.namespaces["argocd-onyx"]
 #   version   = "0.1.0"
 
